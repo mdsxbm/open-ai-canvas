@@ -50,10 +50,11 @@ export type ChannelModel = {
     id: string;
     channelId: string;
     modelKey: string;
+    providerModelKey: string;
     displayName: string;
     capability: "text" | "image" | "video" | "audio" | "";
     protocol?: import("@/lib/model-protocols").ModelProtocol;
-    billingMode: "fixed_request" | "per_second" | "token";
+    billingMode: "fixed_request" | "per_second" | "token" | "per_video_bucket";
     unitPriceMicrocredits: number;
     inputTokenPriceMicrocredits: number;
     outputTokenPriceMicrocredits: number;
@@ -63,8 +64,47 @@ export type ChannelModel = {
     priceVersion: number;
     capabilityVersion?: number;
     capabilityConfig?: import("@/lib/model-capabilities").ModelCapabilityConfig;
+    priceTiers: ChannelModelPriceTier[];
     createdAt: string;
     updatedAt: string;
+};
+
+export type ChannelModelPriceTier = {
+    id: string;
+    channelModelId: string;
+    selector: Record<string, string>;
+    selectorKey: string;
+    resolution: string;
+    videoSeconds: number;
+    providerModelKey: string;
+    billingMode: "fixed_request" | "per_second" | "token";
+    unitPriceMicrocredits: number;
+    inputTokenPriceMicrocredits: number;
+    outputTokenPriceMicrocredits: number;
+    cachedTokenPriceMicrocredits: number;
+    priceConfigured: boolean;
+    enabled: boolean;
+    priceVersion: number;
+    createdAt: string;
+    updatedAt: string;
+};
+
+// 系统渠道模型的写入合同。标量价格只用于兼容旧管理请求；新的后台界面只提交 priceTiers。
+export type ChannelModelMutation = {
+    modelKey: string;
+    providerModelKey?: string;
+    displayName?: string;
+    capability: ChannelModel["capability"];
+    protocol?: ChannelModel["protocol"];
+    enabled?: boolean;
+    capabilityConfig?: ChannelModel["capabilityConfig"];
+    priceTiers?: Array<Omit<ChannelModelPriceTier, "id" | "channelModelId" | "selectorKey" | "priceVersion" | "createdAt" | "updatedAt">>;
+    billingMode?: ChannelModel["billingMode"];
+    unitPriceMicrocredits?: number;
+    inputTokenPriceMicrocredits?: number;
+    outputTokenPriceMicrocredits?: number;
+    cachedTokenPriceMicrocredits?: number;
+    priceConfigured?: boolean;
 };
 
 export type LinuxDOSetting = {
@@ -189,6 +229,26 @@ export function checkinCredits() {
     return request<{ account: CreditAccount; granted: boolean }>(api.post("/wallet/checkin"));
 }
 
+export type CreditPackage = {
+    key: string;
+    title: string;
+    priceFen: number;
+    priceLabel: string;
+    creditsMicrocredits: number;
+    bonusLabel?: string;
+    perkLabel?: string;
+    sort: number;
+};
+
+export function listCreditPackages() {
+    return request<{ packages: CreditPackage[] }>(api.get("/wallet/packages"));
+}
+
+// 一期模拟支付：orderId 由前端生成，服务端按其幂等入账。
+export function simulatePurchase(input: { packageKey: string; method: "wxpay" | "alipay"; orderId: string }) {
+    return request<{ account: CreditAccount; granted: boolean }>(api.post("/wallet/purchase-simulate", input));
+}
+
 export function getAdminCreditPolicy() {
     return request<{ policy: CreditPolicy }>(api.get("/admin/settings/credits"));
 }
@@ -230,15 +290,15 @@ export function fetchAdminChannelModels(channelId: string) {
     return request<{ models: string[]; added: number }>(api.post(`/admin/channels/${encodeURIComponent(channelId)}/models/fetch`));
 }
 
-export function testAdminChannelModel(channelId: string, input: Pick<ChannelModel, "modelKey" | "capability" | "protocol"> & { capabilityConfig?: ChannelModel["capabilityConfig"] }) {
+export function testAdminChannelModel(channelId: string, input: Pick<ChannelModel, "modelKey" | "providerModelKey" | "capability" | "protocol"> & { capabilityConfig?: ChannelModel["capabilityConfig"] }) {
     return request<{ durationMs: number }>(api.post(`/admin/channels/${encodeURIComponent(channelId)}/models/test`, input, { timeout: 10 * 60 * 1000 }));
 }
 
-export function createAdminChannelModel(channelId: string, input: Omit<ChannelModel, "id" | "channelId" | "priceVersion" | "createdAt" | "updatedAt">) {
+export function createAdminChannelModel(channelId: string, input: ChannelModelMutation) {
     return request<{ model: ChannelModel }>(api.post(`/admin/channels/${encodeURIComponent(channelId)}/models`, input));
 }
 
-export function updateAdminChannelModel(channelId: string, id: string, input: Omit<ChannelModel, "id" | "channelId" | "priceVersion" | "createdAt" | "updatedAt">) {
+export function updateAdminChannelModel(channelId: string, id: string, input: ChannelModelMutation) {
     return request<{ model: ChannelModel }>(api.patch(`/admin/channels/${encodeURIComponent(channelId)}/models/${encodeURIComponent(id)}`, input));
 }
 

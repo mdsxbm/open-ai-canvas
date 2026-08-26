@@ -4,13 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { App, Button, Dropdown, Modal, Select } from "antd";
 import { ArrowDownAZ, Clock3, Download, FileUp, ListFilter, MoreHorizontal, Plus, Search, SlidersHorizontal, Trash2, X } from "lucide-react";
 
-import { CollectionGrid, PageHeader, PaginationBar, WorkspacePage } from "@/components/layout/workspace-page";
+import { CollectionGrid, PageHeader, WorkspacePage } from "@/components/layout/workspace-page";
+import { PageHead } from "@/components/brand/page-head";
 import { WorkspaceLoadingState, WorkspaceState } from "@/components/layout/workspace-state";
 
 import { readZip } from "@/lib/zip";
 import { setMediaBlob } from "@/services/file-storage";
 import { setImageBlob } from "@/services/image-storage";
-import { CanvasCreateCard, CanvasProjectCard } from "@/components/canvas/canvas-project-card";
+import { CanvasCreateCard } from "@/components/canvas/canvas-project-card";
+import { CanvasFolderCard } from "@/components/canvas/canvas-folder-card";
 import type { CanvasExportFile } from "@/types/canvas-export";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
@@ -28,8 +30,8 @@ export default function CanvasPage() {
     const [keyword, setKeyword] = useState("");
     const [sort, setSort] = useState<"updated" | "name" | "nodes">("updated");
     const [projectFilter, setProjectFilter] = useState("all");
-    const [page, setPage] = useState(1);
-    const [pageSize, setPageSize] = useState(24);
+    const loadMoreRef = useRef<HTMLDivElement>(null);
+    const [loadedProjectCount, setLoadedProjectCount] = useState(50);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const projects = useCanvasStore((state) => state.projects);
     const importProject = useCanvasStore((state) => state.importProject);
@@ -38,7 +40,7 @@ export default function CanvasPage() {
     const updateProject = useCanvasStore((state) => state.updateProject);
     const [associationOpen, setAssociationOpen] = useState(false);
     const [associationProjectId, setAssociationProjectId] = useState("");
-    const projectQuery = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+    const projectQuery = useQuery({ queryKey: ["projects"], queryFn: () => listProjects() });
 
     const mode = searchParams.get("mode");
     const agentMode = mode === "new" || mode === "recent" || mode === "choose";
@@ -61,7 +63,7 @@ export default function CanvasPage() {
         return values;
     }, [keyword, projectFilter, projects, sort]);
     const projectNames = useMemo(() => new Map((projectQuery.data?.projects || []).map(({ project }) => [project.id, project.name])), [projectQuery.data]);
-    const visibleProjects = filteredProjects.slice((page - 1) * pageSize, page * pageSize);
+    const visibleProjects = filteredProjects.slice(0, loadedProjectCount);
     const showCreateCard = !keyword.trim() && projectFilter === "all";
     const selectedProjects = projects.filter((project) => selectedIds.includes(project.id));
     const projectFilterLabel = projectFilter === "all" ? "全部画布" : projectFilter === "independent" ? "自由画布" : projectNames.get(projectFilter) || "项目画布";
@@ -72,6 +74,21 @@ export default function CanvasPage() {
         { key: "name", label: "按名称", icon: <ArrowDownAZ className="size-3.5" /> },
         { key: "nodes", label: "按节点数量", icon: <ListFilter className="size-3.5" /> },
     ];
+    useEffect(() => {
+        setLoadedProjectCount(50);
+    }, [keyword, projectFilter, sort]);
+    useEffect(() => {
+        const node = loadMoreRef.current;
+        if (!node || visibleProjects.length >= filteredProjects.length) return;
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry?.isIntersecting) setLoadedProjectCount((count) => Math.min(count + 50, filteredProjects.length));
+            },
+            { rootMargin: "600px" },
+        );
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [filteredProjects.length, visibleProjects.length]);
     const associateSelected = async (nextProjectId = associationProjectId) => {
         const projectId = nextProjectId || undefined;
         selectedIds.forEach((id) => updateProject(id, { projectId }));
@@ -173,25 +190,34 @@ export default function CanvasPage() {
 
     return (
         <WorkspacePage grid className="canvas-library-page">
+            <PageHead title="我的画布" />
             <div className="studio-band">
                 <PageHeader
                     title="画布"
                     description="把镜头、素材和想法留在同一张画布里。"
                     meta={<span className="app-projects-header-meta">{projects.length} 个</span>}
                     actions={
-                        <>
-                            <Button className="library-primary-action !h-9 !px-3.5" type="primary" disabled={!hydrated} icon={<Plus className="size-3.5" />} onClick={createAndEnter}>
+                        <div className="canvas-library-header-actions">
+                            <Button className="canvas-library-header-action is-primary library-primary-action" type="primary" disabled={!hydrated} icon={<Plus className="size-3.5" />} onClick={createAndEnter}>
                                 新建画布
                             </Button>
                             {projects.length ? (
-                                <Dropdown menu={{ items: [{ key: "delete-all", danger: true, icon: <Trash2 className="size-3.5" />, label: "删除全部画布", onClick: () => setDeleteIds(projects.map((project) => project.id)) }] }} trigger={["click"]}>
-                                    <Button className="!h-9 !w-9 !p-0" aria-label="更多画布操作" title="更多操作" icon={<MoreHorizontal className="size-4" />} />
+                                <Dropdown
+                                    menu={{
+                                        classNames: { root: "canvas-library-actions-menu", item: "canvas-library-actions-menu-item" },
+                                        items: [{ key: "delete-all", danger: true, icon: <Trash2 className="size-3.5" />, label: "删除全部画布", onClick: () => setDeleteIds(projects.map((project) => project.id)) }],
+                                    }}
+                                    openClassName="is-open"
+                                    placement="bottomRight"
+                                    trigger={["click"]}
+                                >
+                                    <Button className="canvas-library-header-action is-icon" aria-label="更多画布操作" title="更多操作" icon={<MoreHorizontal className="size-4" />} />
                                 </Dropdown>
                             ) : null}
-                            <Button className="!h-9 !px-3.5" disabled={!hydrated} icon={<FileUp className="size-3.5" />} onClick={() => inputRef.current?.click()}>
+                            <Button className="canvas-library-header-action" disabled={!hydrated} icon={<FileUp className="size-3.5" />} onClick={() => inputRef.current?.click()}>
                                 导入
                             </Button>
-                        </>
+                        </div>
                     }
                 />
 
@@ -204,7 +230,6 @@ export default function CanvasPage() {
                             aria-label="搜索画布"
                             onChange={(event) => {
                                 setKeyword(event.target.value);
-                                setPage(1);
                             }}
                         />
                         {keyword ? (
@@ -213,7 +238,6 @@ export default function CanvasPage() {
                                 aria-label="清除搜索"
                                 onClick={() => {
                                     setKeyword("");
-                                    setPage(1);
                                 }}
                             >
                                 <X />
@@ -229,7 +253,6 @@ export default function CanvasPage() {
                                 selectedKeys: [projectFilter],
                                 onClick: ({ key }) => {
                                     setProjectFilter(String(key));
-                                    setPage(1);
                                 },
                             }}
                         >
@@ -246,7 +269,6 @@ export default function CanvasPage() {
                                 selectedKeys: [sort],
                                 onClick: ({ key }) => {
                                     setSort(key as typeof sort);
-                                    setPage(1);
                                 },
                             }}
                         >
@@ -263,7 +285,6 @@ export default function CanvasPage() {
                                     setKeyword("");
                                     setProjectFilter("all");
                                     setSort("updated");
-                                    setPage(1);
                                 }}
                             >
                                 重置
@@ -303,7 +324,7 @@ export default function CanvasPage() {
                                 移出项目
                             </Button>
                         ) : null}
-                        <Button size="small" disabled={!hydrated} icon={<Download className="size-3.5" />} onClick={() => void exportCanvasProjects(selectedProjects, `影策画布-${selectedIds.length}个画布`)}>
+                        <Button size="small" disabled={!hydrated} icon={<Download className="size-3.5" />} onClick={() => void exportCanvasProjects(selectedProjects, `幕山画布-${selectedIds.length}个画布`)}>
                             导出
                         </Button>
                         <Button size="small" danger disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>
@@ -318,23 +339,20 @@ export default function CanvasPage() {
                     <CollectionGrid className="canvas-library-grid">
                         {showCreateCard ? <CanvasCreateCard disabled={!hydrated} onClick={createAndEnter} /> : null}
                         {visibleProjects.map((project) => (
-                            <CanvasProjectCard key={project.id} project={project} projectName={project.projectId ? projectNames.get(project.projectId) || "未同步项目" : undefined} />
+                            <CanvasFolderCard
+                                key={project.id}
+                                project={project}
+                                projectName={project.projectId ? projectNames.get(project.projectId) || "未同步项目" : undefined}
+                                onClick={() => enterProject(project.id)}
+                            />
                         ))}
                     </CollectionGrid>
                 ) : (
-                    <WorkspaceState icon="canvas" title="没有匹配的画布" description="换一个画布名称或重置筛选条件。" />
+                    <WorkspaceState icon="canvas" title="没找到这块画布" description="换个名字或重置筛选条件，再上山看看。" />
                 )}
-
-                <PaginationBar
-                    current={page}
-                    pageSize={pageSize}
-                    total={filteredProjects.length}
-                    pageSizeOptions={[12, 24, 48]}
-                    onChange={(nextPage, nextPageSize) => {
-                        setPage(nextPageSize !== pageSize ? 1 : nextPage);
-                        setPageSize(nextPageSize);
-                    }}
-                />
+                {hydrated && visibleProjects.length ? <div ref={loadMoreRef} className="library-load-more" aria-live="polite">
+                    {visibleProjects.length < filteredProjects.length ? `继续下滑加载更多（每页 50 条）` : `已加载全部 ${filteredProjects.length} 个画布`}
+                </div> : null}
             </div>
 
             <input ref={inputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importCanvas(event.target.files?.[0])} />

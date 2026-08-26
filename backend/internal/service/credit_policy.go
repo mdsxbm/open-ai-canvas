@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -146,23 +145,4 @@ func (s *Service) publicCreditPolicy(userID string) (PublicCreditPolicy, error) 
 	reference := "checkin:" + userID + ":" + time.Now().UTC().Format("2006-01-02")
 	checked, err := s.repo.CreditLedgerReferenceExists(reference)
 	return PublicCreditPolicy{SignupBonusMicrocredits: policy.SignupBonusMicrocredits, CheckinBonusMicrocredits: policy.CheckinBonusMicrocredits, CheckedInToday: checked}, err
-}
-
-// 单价、数量和倍率全程使用整数并向上取整，避免浮点误差造成少扣积分。
-func creditAmount(unitPrice int64, quantity int64, multiplierBPS int64) (int64, error) {
-	if unitPrice < 0 || quantity <= 0 || multiplierBPS <= 0 {
-		return 0, errors.New("积分计费参数无效")
-	}
-	if unitPrice > (1<<63-1)/quantity {
-		return 0, errors.New("积分计费金额溢出")
-	}
-	base := unitPrice * quantity
-	if base > ((1<<63-1)-9_999)/multiplierBPS {
-		return 0, errors.New("积分计费金额溢出")
-	}
-	amount := (base*multiplierBPS + 9_999) / 10_000
-	if amount < 0 {
-		return 0, fmt.Errorf("积分计费金额无效：%d", amount)
-	}
-	return amount, nil
 }

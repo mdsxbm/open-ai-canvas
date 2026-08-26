@@ -43,8 +43,10 @@ export function statusDotClassName(status: TaskStatus) {
     return "task-record-dot is-idle";
 }
 
-export function taskMediaKind(task: GenerationTask): "text" | "image" | "video" {
+export function taskMediaKind(task: GenerationTask): "text" | "image" | "video" | "redraw" {
     const value = `${task.type} ${task.operation || ""}`.toLowerCase();
+    // 真人转绘走独立 kind，任务列表「风格转绘」过滤器依赖此分支（spec Task 12）。
+    if (value.includes("redraw") || value.includes("转绘")) return "redraw";
     if (value.includes("video") || value.includes("视频")) return "video";
     if (value.includes("image") || value.includes("图片") || value.includes("画面")) return "image";
     return "text";
@@ -81,6 +83,8 @@ export function formatModelName(config: AiConfig, task: GenerationTask) {
     const raw = (task.model || task.provider || "").trim();
     const model = raw.includes("::") ? raw.split("::").pop()?.trim() || raw : raw;
 
+    // 工作流名称是任务快照，不属于模型渠道，不能交给模型展示名解析器再次映射成“系统模型”。
+    if (task.provider === "runninghub" || task.provider === "comfyui-bridge") return raw || "工作流";
     if (!model) return "工作流";
     if (model === "version-router") return "版本对比工作流";
     if (model === "workflow-router") return "工作流路由";

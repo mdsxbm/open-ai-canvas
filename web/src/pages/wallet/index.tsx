@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { App, Button, Grid, Input, Segmented, Table, Tag } from "antd";
+import { App, Button, Grid, Input, Segmented, Table, Tabs, Tag } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowDownLeft, ArrowUpRight, CalendarCheck, Coins, RefreshCw, RotateCcw, ShieldCheck, SlidersHorizontal, Sparkles, TicketCheck } from "lucide-react";
 
 import { formatCredits } from "@/constant/credits";
+import { PageHead } from "@/components/brand/page-head";
 import { PaginationBar, TableSurface } from "@/components/layout/workspace-page";
 import { WorkspaceState } from "@/components/layout/workspace-state";
 import { aceternityMotion } from "@/lib/aceternity-motion";
 import { checkinCredits, getWallet, redeemCredits, type CreditLedgerEntry, type WalletSummary } from "@/services/api/wallet";
 import { modelDisplayName, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { CreditConsumptionTable } from "@/pages/wallet/components/credit-consumption-table";
+import { CreditPackageGrid } from "@/pages/wallet/components/credit-package-grid";
 
 type LedgerFilter = "all" | "income" | "consume" | "refund";
 
@@ -117,6 +120,7 @@ export default function WalletPage() {
 
     return (
         <main className="app-user-content app-workspace-scroll library-page wallet-library-page relative h-full overflow-y-auto text-foreground">
+            <PageHead title="我的钱包" />
             <div className="relative w-full px-4 py-6 sm:px-6 lg:px-8">
                 <div className="studio-band">
                     <motion.header initial={reducedMotion ? false : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: aceternityMotion.duration.panel, ease: aceternityMotion.easing.enter }} className="app-page-header flex flex-wrap items-start justify-between gap-4">
@@ -146,7 +150,7 @@ export default function WalletPage() {
                         <div className="wallet-balance-inner">
                             <div className="wallet-balance-primary">
                                 <div className="wallet-balance-heading">
-                                    <span className="wallet-balance-icon"><Coins /></span>
+                                    <span className="library-icon-tile wallet-balance-icon"><Coins /></span>
                                     <div><strong>可用创作积分</strong><span>最近更新 {formatTime(account?.updatedAt)}</span></div>
                                 </div>
                                 <div className="wallet-balance-number">
@@ -186,41 +190,77 @@ export default function WalletPage() {
                     </motion.div>
                 </section>
 
-                <section className="wallet-ledger-panel app-workspace-surface mt-9 rounded-lg p-4 backdrop-blur-xl sm:p-5">
-                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                        <div>
-                            <h2 className="text-base font-semibold">积分流水</h2>
-                            <p className="mt-1 text-xs text-foreground/55">当前展示最近 {wallet?.entries.length || 0} 条记录。</p>
-                        </div>
-                        <Segmented
-                            block={!screens.sm}
-                            value={filter}
-                            options={ledgerFilterOptions}
-                            onChange={(value) => {
-                                setFilter(value as LedgerFilter);
-                                setPage(1);
-                            }}
-                        />
-                    </div>
+                <Tabs
+                    className="wallet-tabs mt-9"
+                    defaultActiveKey="consumption"
+                    items={[
+                        {
+                            key: "consumption",
+                            label: "积分价目",
+                            children: (
+                                <section className="wallet-ledger-panel app-workspace-surface rounded-lg p-4 backdrop-blur-xl sm:p-5">
+                                    <CreditConsumptionTable />
+                                </section>
+                            ),
+                        },
+                        {
+                            key: "packages",
+                            label: "充值积分包",
+                            children: (
+                                <section className="wallet-ledger-panel app-workspace-surface rounded-lg p-4 backdrop-blur-xl sm:p-5">
+                                    <CreditPackageGrid
+                                        onPaid={() => {
+                                            setPage(1);
+                                            void reload(1, pageSize);
+                                            window.dispatchEvent(new CustomEvent("wallet:updated"));
+                                        }}
+                                    />
+                                </section>
+                            ),
+                        },
+                        {
+                            key: "ledger",
+                            label: "账单明细",
+                            children: (
+                                <section className="wallet-ledger-panel app-workspace-surface rounded-lg p-4 backdrop-blur-xl sm:p-5">
+                                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                                        <div>
+                                            <h2 className="text-base font-semibold">积分流水</h2>
+                                            <p className="mt-1 text-xs text-foreground/55">当前展示最近 {wallet?.entries.length || 0} 条记录。</p>
+                                        </div>
+                                        <Segmented
+                                            block={!screens.sm}
+                                            value={filter}
+                                            options={ledgerFilterOptions}
+                                            onChange={(value) => {
+                                                setFilter(value as LedgerFilter);
+                                                setPage(1);
+                                            }}
+                                        />
+                                    </div>
 
-                    {screens.md ? (
-                        <TableSurface className="mt-0 rounded-xl border-border/70 bg-transparent">
-                            <Table className="app-data-table wallet-ledger-table" rowKey="id" size="middle" loading={loading} columns={columns} dataSource={entries} pagination={false} tableLayout="fixed" scroll={{ x: 990 }} />
-                        </TableSurface>
-                    ) : (
-                        <div className="grid gap-1 overflow-hidden rounded-md bg-transparent">{entries.length ? entries.map((entry) => <LedgerMobileRow key={entry.id} config={config} entry={entry} />) : <WorkspaceState compact icon="wallet" title="没有匹配的积分记录" description="切换流水类型，或完成一次生成后再回来查看。" />}</div>
-                    )}
-                    <PaginationBar
-                        current={page}
-                        pageSize={pageSize}
-                        total={wallet?.total || 0}
-                        pageSizeOptions={[20, 50, 100]}
-                        onChange={(nextPage, nextPageSize) => {
-                            setPage(nextPageSize !== pageSize ? 1 : nextPage);
-                            setPageSize(nextPageSize);
-                        }}
-                    />
-                </section>
+                                    {screens.md ? (
+                                        <TableSurface className="mt-0 rounded-xl border-border/70 bg-transparent">
+                                            <Table className="app-data-table wallet-ledger-table" rowKey="id" size="middle" loading={loading} columns={columns} dataSource={entries} pagination={false} tableLayout="fixed" scroll={{ x: 990 }} />
+                                        </TableSurface>
+                                    ) : (
+                                        <div className="grid gap-1 overflow-hidden rounded-md bg-transparent">{entries.length ? entries.map((entry) => <LedgerMobileRow key={entry.id} config={config} entry={entry} />) : <WorkspaceState compact icon="wallet" title="没有匹配的积分记录" description="切换流水类型，或完成一次生成后再回来查看。" />}</div>
+                                    )}
+                                    <PaginationBar
+                                        current={page}
+                                        pageSize={pageSize}
+                                        total={wallet?.total || 0}
+                                        pageSizeOptions={[20, 50, 100]}
+                                        onChange={(nextPage, nextPageSize) => {
+                                            setPage(nextPageSize !== pageSize ? 1 : nextPage);
+                                            setPageSize(nextPageSize);
+                                        }}
+                                    />
+                                </section>
+                            ),
+                        },
+                    ]}
+                />
             </div>
         </main>
     );

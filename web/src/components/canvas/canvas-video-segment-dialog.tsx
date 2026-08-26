@@ -8,7 +8,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { buildTimelineImportSegments, type CanvasTimelineSegmentItem } from "@/lib/canvas/canvas-video-timeline-segments";
 import { listVideoReferenceModels } from "@/lib/canvas/canvas-video-regeneration";
 import { modelCapabilityConfigFor } from "@/lib/model-capabilities";
-import { resolveCompatibleModel, type ModelRequirements } from "@/lib/model-selection";
+import { modelRequestOptions, resolveCompatibleModel, type ModelRequirements } from "@/lib/model-selection";
 import { navigateToSettings } from "@/lib/settings-navigation";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { resolveMediaUrl } from "@/services/file-storage";
@@ -117,6 +117,7 @@ export function CanvasVideoSegmentDialog({ node, nodes, connections, open, mode,
             input: { textCount: hasPrompt ? 1 : 0, imageCount: 0, videoCount: 1, audioCount: 0, characterCount: 0 },
             videoOperation: operation,
             videoSeconds: config.videoSeconds,
+			options: modelRequestOptions(config, "video"),
         }),
         [config.videoSeconds, hasPrompt, operation],
     );
@@ -412,6 +413,7 @@ function videoOperationLabel(operation: CanvasVideoEditOperation) {
     const labels: Record<CanvasVideoEditOperation, string> = {
         text_to_video: "文生视频",
         image_to_video: "图生视频",
+        reference_to_video: "全模态参考",
         extend: "视频续写",
         inpaint: "局部修改",
         replace_element: "元素替换",

@@ -1,11 +1,19 @@
-import type { ModelChannel } from "@/stores/use-config-store";
+import type { ChannelAPIKey, ModelChannel } from "@/stores/use-config-store";
 import type { CreditLedgerEntry } from "@/services/api/wallet";
 import type { GenerationTask, TaskStatus } from "@/services/api/task-center";
 import type { CanvasDrawingEngineSetting } from "@/lib/canvas/canvas-drawing-engine";
 import type { FeatureAvailability } from "@/stores/use-user-store";
 import { apiClient, request } from "@/services/api/request";
+import type { PublicLogicalModel } from "@/services/api/logical-models";
 
 const api = apiClient;
+
+let authSessionRequest: Promise<AuthSessionPayload> | null = null;
+let authSessionCache: { payload: AuthSessionPayload; expiresAt: number } | null = null;
+
+function invalidateAuthSessionCache() {
+    authSessionCache = null;
+}
 
 export type LocalUser = {
     id: string;
@@ -30,7 +38,7 @@ export type AdminUser = LocalUser & {
 
 export type AuthSessionPayload = {
     user: LocalUser | null;
-    systemChannels?: ModelChannel[];
+    logicalModels?: PublicLogicalModel[];
     runtimeLimits?: RuntimeLimits;
     drawingEngine?: CanvasDrawingEngineSetting;
     features?: FeatureAvailability;
@@ -249,7 +257,7 @@ export type UserPromptPreference = {
 
 export type AdminOSSSetting = {
     enabled: boolean;
-    provider: "aliyun" | "tencent";
+    provider: "aliyun" | "tencent" | "qiniu";
     region: string;
     endpoint: string;
     cdnBaseUrl: string;
@@ -259,6 +267,18 @@ export type AdminOSSSetting = {
     hasAccessKeySecret: boolean;
     publicBaseUrl: string;
     pathPrefix: string;
+    updatedBy?: string;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+export type AdminArkPrivateAssetSetting = {
+    enabled: boolean;
+    region: string;
+    projectName: string;
+    accessKeyId: string;
+    accessKeySecret?: string;
+    hasAccessKeySecret: boolean;
     updatedBy?: string;
     createdAt?: string;
     updatedAt?: string;
@@ -336,7 +356,18 @@ export function linuxDOLoginURL(next: string) {
 }
 
 export function getAuthSession() {
-    return request<AuthSessionPayload>(api.get("/auth/session"));
+    const now = Date.now();
+    if (authSessionCache && authSessionCache.expiresAt > now) return Promise.resolve(authSessionCache.payload);
+    if (authSessionRequest) return authSessionRequest;
+    authSessionRequest = request<AuthSessionPayload>(api.get("/auth/session"))
+        .then((payload) => {
+            authSessionCache = { payload, expiresAt: Date.now() + 5_000 };
+            return payload;
+        })
+        .finally(() => {
+            authSessionRequest = null;
+        });
+    return authSessionRequest;
 }
 
 export function getSystemChannels() {
@@ -351,24 +382,30 @@ export function getAdminFeatureAvailability() {
     return request<{ features: FeatureAvailability }>(api.get("/admin/settings/features"));
 }
 
-export function updateAdminFeatureAvailability(features: Pick<FeatureAvailability, "shortDramaEnabled" | "taskCenterEnabled" | "creditsEnabled" | "customChannelsEnabled">) {
+export function updateAdminFeatureAvailability(features: Pick<FeatureAvailability, "shortDramaEnabled" | "taskCenterEnabled" | "creditsEnabled" | "customChannelsEnabled" | "frontendModelsEnabled" | "pluginCenterEnabled" | "systemPluginsVisibleToUsers">) {
     return request<{ features: FeatureAvailability }>(api.patch("/admin/settings/features", features));
 }
 
-export function login(input: { username: string; password: string }) {
-    return request<{ user: LocalUser }>(api.post("/auth/login", input));
+export async function login(input: { username: string; password: string }) {
+    const result = await request<{ user: LocalUser }>(api.post("/auth/login", input));
+    // 登录会改变服务端会话身份，不能让登录前缓存的游客 session 污染后续恢复。
+    invalidateAuthSessionCache();
+    return result;
 }
 
 export function sendRegistrationEmailCode(email: string) {
     return request<{ sent: boolean }>(api.post("/auth/email-code", { email }));
 }
 
-export function register(input: { username: string; email?: string; emailCode?: string; displayName?: string; password: string }) {
+// 幕山攀登计划邀请码（spec §3.3）：公共注册开启时可空，关闭时必填并经 ValidateInviteCode 校验。
+export function register(input: { username: string; email?: string; emailCode?: string; displayName?: string; password: string; inviteCode?: string }) {
     return request<{ user: LocalUser }>(api.post("/auth/register", input));
 }
 
-export function logout() {
-    return request<{ ok: boolean }>(api.post("/auth/logout"));
+export async function logout() {
+    const result = await request<{ ok: boolean }>(api.post("/auth/logout"));
+    invalidateAuthSessionCache();
+    return result;
 }
 
 export type AdminListParams = { keyword?: string; status?: string; role?: string; page?: number; limit?: number };
@@ -429,6 +466,47 @@ export function deleteAdminChannel(id: string) {
     return request<{ ok: boolean }>(api.delete(`/admin/channels/${encodeURIComponent(id)}`));
 }
 
+// 渠道多 API Key 管理
+export type ChannelAPIKeyRequest = {
+    label: string;
+    apiKey?: string;
+    secretKey?: string;
+    enabled?: boolean;
+    priority?: number;
+    active?: boolean;
+};
+
+export function listChannelAPIKeys(channelId: string) {
+    return request<{ keys: ChannelAPIKey[] }>(api.get(`/admin/channels/${encodeURIComponent(channelId)}/keys`));
+}
+
+export function saveChannelAPIKey(channelId: string, keyId: string, input: ChannelAPIKeyRequest) {
+    const params = new URLSearchParams();
+    if (keyId) params.set("keyId", keyId);
+    const query = params.toString();
+    return request<{ key: ChannelAPIKey }>(
+        api.post(`/admin/channels/${encodeURIComponent(channelId)}/keys${query ? `?${query}` : ""}`, input),
+    );
+}
+
+export function deleteChannelAPIKey(channelId: string, keyId: string) {
+    return request<Record<string, never>>(
+        api.delete(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}`),
+    );
+}
+
+export function setChannelActiveAPIKey(channelId: string, keyId: string) {
+    return request<Record<string, never>>(
+        api.post(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}/active`),
+    );
+}
+
+export function resetChannelAPIKeyFailures(channelId: string, keyId: string) {
+    return request<Record<string, never>>(
+        api.post(`/admin/channels/${encodeURIComponent(channelId)}/keys/${encodeURIComponent(keyId)}/reset-failures`),
+    );
+}
+
 export function listAdminPromptTemplates() {
     return request<{ templates: PromptTemplate[]; definitions: PromptOperationDefinition[] }>(api.get("/admin/prompt-templates"));
 }
@@ -463,6 +541,14 @@ export function getAdminOSSSetting() {
 
 export function updateAdminOSSSetting(input: Partial<AdminOSSSetting>) {
     return request<{ setting: AdminOSSSetting }>(api.patch("/admin/settings/oss", input));
+}
+
+export function getAdminArkPrivateAssetSetting() {
+    return request<{ setting: AdminArkPrivateAssetSetting }>(api.get("/admin/settings/ark-private-assets"));
+}
+
+export function updateAdminArkPrivateAssetSetting(input: Partial<AdminArkPrivateAssetSetting>) {
+    return request<{ setting: AdminArkPrivateAssetSetting }>(api.patch("/admin/settings/ark-private-assets", input));
 }
 
 export function getAdminRuntimePolicySetting() {

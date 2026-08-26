@@ -1,17 +1,20 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button } from "antd";
 import { ArrowRight, Bot, Clapperboard, FolderKanban, Images, LayoutGrid, ListChecks, Plus, Sparkles } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
+import { PageHead } from "@/components/brand/page-head";
 import { CanvasProjectCard } from "@/components/canvas/canvas-project-card";
 import { WorkspaceErrorState, WorkspaceLoadingState } from "@/components/layout/workspace-state";
 import { WorkspaceSignalIcon } from "@/components/ui/aceternity/workspace-signal-icon";
 import { projectDetailStage, projectSummaryCompletion } from "@/lib/project-workbench";
 import { getProject, listProjects, type ProjectSummary } from "@/services/api/projects";
 import { createCanvasProjectWithRemoteSync } from "@/services/user-data-sync";
-import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
+import { type CanvasNodeData } from "@/types/canvas";
+import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { CATEGORY_RAILS, classifyCanvas, formatRelativeTime, GalleryCard, type GalleryCategory, getCanvasCoverUrl } from "@/pages/home/gallery";
 
 const workflow = [
     { title: "整理故事", description: "导入小说、粘贴文本或创建章节" },
@@ -28,7 +31,7 @@ export default function IndexPage() {
     const user = useUserStore((state) => state.user);
     const userHydrated = useUserStore((state) => state.hydrated);
     const shortDramaEnabled = useUserStore((state) => state.features.shortDramaEnabled);
-    const domainProjectsQuery = useQuery({ queryKey: ["projects"], queryFn: listProjects, enabled: Boolean(user && shortDramaEnabled) });
+    const domainProjectsQuery = useQuery({ queryKey: ["projects"], queryFn: () => listProjects(), enabled: Boolean(user && shortDramaEnabled) });
     const domainProjects = useMemo(
         () => [...(domainProjectsQuery.data?.projects || [])].sort((left, right) => right.project.updatedAt.localeCompare(left.project.updatedAt)),
         [domainProjectsQuery.data],
@@ -57,9 +60,26 @@ export default function IndexPage() {
     };
 
     const loadingUserWorkspace = !userHydrated || (Boolean(user && shortDramaEnabled) && domainProjectsQuery.isLoading);
+    const galleryCanvases = useMemo(
+        () => [...canvasProjects].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 12),
+        [canvasProjects],
+    );
+    const [galleryCategory, setGalleryCategory] = useState<GalleryCategory>("all");
+    const visibleGalleryCanvases = useMemo(
+        () => (galleryCategory === "all" ? galleryCanvases : galleryCanvases.filter((item) => classifyCanvas(item) === galleryCategory)),
+        [galleryCanvases, galleryCategory],
+    );
+    const showGallery = canvasHydrated && galleryCanvases.length > 0;
     return (
         <main className="app-user-content app-workspace-canvas app-workspace-scroll h-full overflow-y-auto text-foreground">
+            <PageHead title="首页" />
             <div className="app-home-workbench w-full px-4 pb-12 pt-5 sm:px-6 lg:px-8">
+                <HomeHero
+                    showGallery={showGallery}
+                    canvases={visibleGalleryCanvases}
+                    category={galleryCategory}
+                    onCategoryChange={setGalleryCategory}
+                />
                 {loadingUserWorkspace ? (
                     <WorkspaceLoadingState className="mt-3" label="正在恢复工作台" detail="读取项目、章节和最近画布" rows={5} />
                 ) : user && shortDramaEnabled && domainProjectsQuery.isError ? (
@@ -179,7 +199,7 @@ function FirstProjectWorkspace({ authenticated, canvasHydrated, recentIndependen
     return (
         <>
             <section className="app-first-project-intro border-b border-border/80 pb-8 pt-3 sm:pb-10 sm:pt-6">
-                <div className="inline-flex items-center gap-2 text-xs font-semibold text-foreground/48"><WorkspaceSignalIcon variant="home" size="sm" />影策</div>
+                <div className="inline-flex items-center gap-2 text-xs font-semibold text-foreground/48"><WorkspaceSignalIcon variant="home" size="sm" />幕山</div>
                 <h1 className="mt-5 max-w-[780px] text-3xl font-semibold leading-[1.08] sm:text-4xl lg:text-5xl">把一个故事推进到可交付的镜头</h1>
                 <p className="mt-5 max-w-[680px] text-sm leading-7 text-foreground/58 sm:text-base">从章节、角色和参考图开始，逐步生成分镜、视频和可复用资产。需要自由探索时，也可以先打开一张自由画布。</p>
                 <div className="mt-7 flex flex-wrap items-center gap-3">
@@ -267,13 +287,51 @@ function FeatureLine({ icon, text }: { icon: ReactNode; text: string }) {
     return <div className="grid grid-cols-[20px_minmax(0,1fr)] gap-2.5"><span className="text-foreground/35">{icon}</span><p>{text}</p></div>;
 }
 
-function formatRelativeTime(value: string) {
-    const diffMinutes = Math.round((new Date(value).getTime() - Date.now()) / 60_000);
-    const formatter = new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" });
-    if (Math.abs(diffMinutes) < 60) return formatter.format(diffMinutes, "minute");
-    const diffHours = Math.round(diffMinutes / 60);
-    if (Math.abs(diffHours) < 24) return formatter.format(diffHours, "hour");
-    const diffDays = Math.round(diffHours / 24);
-    if (Math.abs(diffDays) < 30) return formatter.format(diffDays, "day");
-    return new Date(value).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+function getGreeting(): string {
+    const hour = new Date().getHours();
+    if (hour < 5) return "夜深了";
+    if (hour < 12) return "上午好";
+    if (hour < 18) return "下午好";
+    return "晚上好";
+}
+
+function HomeHero({ showGallery, canvases, category, onCategoryChange }: {
+    showGallery: boolean;
+    canvases: CanvasProject[];
+    category: GalleryCategory;
+    onCategoryChange: (value: GalleryCategory) => void;
+}) {
+    return (
+        <section className="app-home-hero">
+            <div className="app-home-hero-greeting">
+                <span className="app-home-hero-eyebrow"><WorkspaceSignalIcon variant="home" size="sm" />幕山创作台</span>
+                <h1 className="app-home-hero-title">{getGreeting()}，今天要做点什么呢？</h1>
+                <p className="app-home-hero-subtitle">{showGallery ? "下面是你最近的画布作品，挑一张继续，或开个新的。" : "从一个故事、一张画布开始，把它推进到可交付的镜头。"}</p>
+            </div>
+            {showGallery ? (
+                <>
+                    <nav className="app-home-category-rail" aria-label="作品分类">
+                        {CATEGORY_RAILS.map((item) => (
+                            <button
+                                key={item.key}
+                                type="button"
+                                aria-pressed={category === item.key}
+                                className={`app-home-category-chip ${category === item.key ? "is-active" : ""}`}
+                                onClick={() => onCategoryChange(item.key)}
+                            >
+                                {item.icon}<span>{item.label}</span>
+                            </button>
+                        ))}
+                    </nav>
+                    {canvases.length ? (
+                        <div className="app-home-gallery">
+                            {canvases.map((project) => <GalleryCard key={project.id} project={project} />)}
+                        </div>
+                    ) : (
+                        <div className="app-home-gallery-empty">这个分类下还没有画布，换个分类看看。</div>
+                    )}
+                </>
+            ) : null}
+        </section>
+    );
 }

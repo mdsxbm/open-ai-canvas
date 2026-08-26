@@ -76,7 +76,7 @@ export default function ProjectCanvasesView({ detail, refreshProject }: ProjectD
                         );
                     })}
                 </div>
-            ) : <WorkspaceState icon="canvas" title="还没有项目画布" description="使用右上角的新建画布开始创作。" />}
+            ) : <WorkspaceState icon="canvas" title="幕布还未拉开" description="在右上角新建一块画布，开拍你的第一镜。" />}
         </div>
     );
 }

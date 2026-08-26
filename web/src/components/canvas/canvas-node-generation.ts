@@ -4,10 +4,13 @@ import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { CanvasNodeType, type CanvasConnection, type CanvasGenerationMode, type CanvasNodeData } from "@/types/canvas";
-import { getGenerationResourceNodes } from "@/lib/canvas/canvas-resource-references";
+import { getGenerationResourceNodes, getContextResourceNodes } from "@/lib/canvas/canvas-resource-references";
+import { isNeutralColorGrade, resolveCanvasColorGradeReference } from "@/lib/canvas/canvas-color-grade";
+import { getNodeResourceKind } from "@/lib/canvas/node-registry";
 import { resolveCanvasDrawingReference } from "@/lib/canvas/canvas-drawing-reference";
 import { compileCharacterReferencePrompt } from "@/lib/canvas/canvas-character-reference";
 import { nodeReferenceImage } from "@/lib/canvas/canvas-project-generation";
+import { isCanvasWorkflowProvider } from "@/lib/canvas/canvas-workflow";
 import type { ModelReferenceLimits } from "@/lib/model-selection";
 import type { Asset } from "@/stores/use-asset-store";
 
@@ -59,12 +62,28 @@ export type NodeGenerationInput = {
 
 export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string, assets: Asset[], promptOnly = false): NodeGenerationContext {
     const connectedInputs = buildNodeGenerationInputs(nodeId, nodes, connections);
-    const inputs = [...connectedInputs, ...buildAssetGenerationInputs(assets)];
     const sourceNode = nodes.find((node) => node.id === nodeId);
+    const portraitTextureInput = sourceNode?.type === CanvasNodeType.Image && sourceNode.metadata?.content && sourceNode.metadata?.portraitTexture
+        ? (() => {
+              const image = readReferenceImage(sourceNode, nodes, connections);
+              return image ? [{ nodeId: sourceNode.id, type: "image" as const, title: sourceNode.title, image }] : [];
+          })()
+        : [];
+    const inputs = [...connectedInputs, ...portraitTextureInput, ...buildAssetGenerationInputs(assets)];
     const storyboardInputs = getConnectedStoryboardRows(nodeId, nodes, connections);
     const hasExplicitResourceMention = /@\[(?:node|asset):[^\]]+\]/.test(normalizeLegacyNodeMentions(prompt, inputs));
-    if ((sourceNode?.type === CanvasNodeType.Config && Boolean(sourceNode.metadata?.composerContent?.trim())) || hasExplicitResourceMention) {
-        return buildComposerGenerationContext(inputs, prompt, [sourceNode?.metadata?.videoStartFrameNodeId, sourceNode?.metadata?.videoEndFrameNodeId].filter((id): id is string => Boolean(id)), promptOnly);
+    const isWorkflowSource = sourceNode?.type === CanvasNodeType.Config && isCanvasWorkflowProvider(sourceNode.metadata);
+    if ((Boolean(sourceNode?.metadata?.composerContent?.trim()) && (sourceNode?.type === CanvasNodeType.Config || isWorkflowSource)) || hasExplicitResourceMention) {
+        const autoIncludeWorkflowMedia = isWorkflowSource;
+        return buildComposerGenerationContext(
+            inputs,
+            prompt,
+            // 工作流节点由字段映射接收全部连线媒体；视频节点的历史首尾帧字段不能再额外追加参考图。
+            autoIncludeWorkflowMedia ? [] : [sourceNode?.metadata?.videoStartFrameNodeId, sourceNode?.metadata?.videoEndFrameNodeId].filter((id): id is string => Boolean(id)),
+            promptOnly,
+            autoIncludeWorkflowMedia,
+            connectedInputs,
+        );
     }
 
     const isStoryboardMedia = sourceNode?.type === CanvasNodeType.Image || sourceNode?.type === CanvasNodeType.Video;
@@ -112,7 +131,14 @@ function removeTrailingInputBlocks(prompt: string, inputs: NodeGenerationInput[]
     return next;
 }
 
-function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: string, videoFrameNodeIds: string[] = [], promptOnly = false): NodeGenerationContext {
+function buildComposerGenerationContext(
+    inputs: NodeGenerationInput[],
+    prompt: string,
+    videoFrameNodeIds: string[] = [],
+    promptOnly = false,
+    autoIncludeWorkflowMedia = false,
+    workflowMediaInputs: NodeGenerationInput[] = [],
+): NodeGenerationContext {
     const normalizedPrompt = normalizeLegacyNodeMentions(prompt, inputs);
     const inputByToken = new Map(inputs.map((input) => [generationInputToken(input), input]));
     const nodeInputById = new Map(inputs.filter((input) => !input.nodeId.startsWith("asset:")).map((input) => [input.nodeId, input]));
@@ -123,6 +149,16 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: s
     let hasToken = false;
     let lastIndex = 0;
     let nextPrompt = "";
+
+    if (autoIncludeWorkflowMedia) {
+        // 先固定“图片1/视频1”等提示词标签的顺序，和工作流槽位保持一致；
+        // 用户先 @ 第二张图时，提示词也不会把它误标成第一张。
+        workflowMediaInputs.forEach((input) => {
+            if (input.type === "text" || labelByNodeId.has(input.nodeId)) return;
+            const labelKind = input.sourceKind === "drawing" ? "drawing" : input.type;
+            labelByNodeId.set(input.nodeId, generationLabel(labelKind, counts[labelKind]++));
+        });
+    }
 
     for (const match of normalizedPrompt.matchAll(/@\[(node|asset):([^\]]+)\]/g)) {
         if (match.index === undefined) continue;
@@ -145,6 +181,24 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: s
 
     nextPrompt += normalizedPrompt.slice(lastIndex);
     if (textBlocks.length && !promptOnly) nextPrompt = `${nextPrompt.trim()}\n\n${textBlocks.join("\n\n")}`;
+    if (autoIncludeWorkflowMedia) {
+        // RunningHub/ComfyUI 工作流按保存的字段槽位接收图片、视频和音频；
+        // 配置节点不能因为提示词里没有逐个 @ 就丢失已连接媒体。
+        // 先按连线顺序放入媒体，避免用户在提示词里 @图片2 后改变工作流槽位的索引；
+        // 素材库中的显式 @ 引用仍保留在后面，不会被自动模式吞掉。
+        const explicitInputs = selectedInputs.splice(0);
+        const selectedNodeIds = new Set<string>();
+        workflowMediaInputs.forEach((input) => {
+            if (input.type === "text" || selectedNodeIds.has(input.nodeId)) return;
+            selectedInputs.push(input);
+            selectedNodeIds.add(input.nodeId);
+        });
+        explicitInputs.forEach((input) => {
+            if (selectedNodeIds.has(input.nodeId)) return;
+            selectedInputs.push(input);
+            selectedNodeIds.add(input.nodeId);
+        });
+    }
     // 首尾帧是结构化生成参数，不受提示词中的 @ 引用筛选影响。
     const selectedNodeIds = new Set(selectedInputs.map((input) => input.nodeId));
     videoFrameNodeIds.forEach((nodeId) => {
@@ -227,8 +281,10 @@ export function buildNodeGenerationInputs(nodeId: string, nodes: CanvasNodeData[
     return resourceNodes.flatMap((node): NodeGenerationInput[] => {
         const character = readCharacterReference(node);
         if (character) return [{ nodeId: node.id, type: "character" as const, title: node.title, character }];
-        const image = readReferenceImage(node);
-        if (image) return [{ nodeId: node.id, type: "image" as const, sourceKind: image.source?.kind, title: node.title, image }];
+        const image = readReferenceImage(node, nodes, connections);
+        // sourceKind 只是「标签用绘图N而不是参考图N」的覆盖开关，不是来源全集。
+        // 调色节点在下游就是一张普通参考图，按 image 标签即正确。
+        if (image) return [{ nodeId: node.id, type: "image" as const, sourceKind: image.source?.kind === "drawing" ? "drawing" : undefined, title: node.title, image }];
         const video = readReferenceVideo(node);
         if (video) return [{ nodeId: node.id, type: "video" as const, title: node.title, video }];
         const audio = readReferenceAudio(node);
@@ -311,6 +367,7 @@ export async function hydrateNodeGenerationContext(context: NodeGenerationContex
     let referenceImages = await Promise.all(
         context.referenceImages.map(async (image) => {
             if (image.source?.kind === "drawing") return resolveCanvasDrawingReference(projectId, image);
+            if (image.source?.kind === "colorgrade") return resolveCanvasColorGradeReference(image);
             return { ...image, dataUrl: await imageToDataUrl(image) };
         }),
     );
@@ -448,7 +505,7 @@ function generationLabel(type: NodeGenerationInput["type"] | "drawing", index: n
     return `文本${index + 1}`;
 }
 
-function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
+function readReferenceImage(node: CanvasNodeData, nodes: CanvasNodeData[], connections: CanvasConnection[]): ReferenceImage | null {
     if (node.type === CanvasNodeType.Drawing && node.metadata?.drawingId) {
         return {
             id: node.id,
@@ -463,16 +520,39 @@ function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
             },
         };
     }
+    if (node.type === CanvasNodeType.ColorGrade) {
+        // 调色节点自己不存图：源图在上游，参数在 metadata。没连线就跳过这条输入，
+        // 而不是抛错——画布上放一个还没连线的调色节点是很正常的中间状态。
+        // 判据与节点渲染保持一致（都要求上游是带 content 的图片），
+        // 否则会出现「预览里看到了、生成时却没用上」这类不报错的偏差。
+        const source = getContextResourceNodes(node.id, nodes, connections).find((item) => getNodeResourceKind(item) === "image" && item.metadata?.content);
+        const url = source?.metadata?.content;
+        if (!source || !url) return null;
+
+        const grade = node.metadata?.colorGrade;
+        // 未调色时直接透传源图，省掉一次渲染与上传（也就不占文件容量）。
+        if (!grade || isNeutralColorGrade(grade)) {
+            const passthrough = nodeReferenceImage(source);
+            return passthrough ? { ...passthrough, id: node.id, name: node.title || `调色-${node.id}` } : null;
+        }
+        return {
+            id: node.id,
+            name: node.title || `调色-${node.id}`,
+            type: "image/png",
+            dataUrl: "",
+            source: { kind: "colorgrade", url, grade },
+        };
+    }
     return nodeReferenceImage(node);
 }
 
 function readReferenceVideo(node: CanvasNodeData): ReferenceVideo | null {
-    if (node.type !== CanvasNodeType.Video || !node.metadata?.content) return null;
+    if (node.type !== CanvasNodeType.Video || (!node.metadata?.content && !node.metadata?.storageKey)) return null;
     return {
         id: node.id,
         name: `${node.title || node.id}.mp4`,
         type: node.metadata.mimeType || "video/mp4",
-        url: node.metadata.content,
+        url: node.metadata.content || "",
         storageKey: node.metadata.storageKey,
         bytes: node.metadata.bytes,
         width: node.metadata.naturalWidth,
@@ -482,12 +562,12 @@ function readReferenceVideo(node: CanvasNodeData): ReferenceVideo | null {
 }
 
 function readReferenceAudio(node: CanvasNodeData): ReferenceAudio | null {
-    if (node.type !== CanvasNodeType.Audio || !node.metadata?.content) return null;
+    if (node.type !== CanvasNodeType.Audio || (!node.metadata?.content && !node.metadata?.storageKey)) return null;
     return {
         id: node.id,
         name: `${node.title || node.id}.mp3`,
         type: node.metadata.mimeType || "audio/mpeg",
-        url: node.metadata.content,
+        url: node.metadata.content || "",
         storageKey: node.metadata.storageKey,
         bytes: node.metadata.bytes,
         durationMs: node.metadata.durationMs,

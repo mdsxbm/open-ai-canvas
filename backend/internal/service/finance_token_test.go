@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"infinite-canvas/backend/internal/billing"
 	"infinite-canvas/backend/internal/model"
 )
 
@@ -56,12 +57,14 @@ func TestEstimateArkVideoTokensCapsReferenceDuration(t *testing.T) {
 }
 
 func TestTokenEstimateAmountAllowsVideoOutputOnly(t *testing.T) {
-	amount, err := tokenEstimateAmount(&model.ChannelModel{OutputTokenPriceMicrocredits: 16_000_000}, tokenBillingEstimate{OutputTokens: 119790}, 10_000)
+	// 重构后 tokenEstimateAmount 已删除，改为调用 billing.TokenAmount（创建侧预估 cached=0）。
+	// 断言保持字节级等价：output=119790, outPrice=16_000_000, multiplier=10_000 → 1_916_640
+	amount, err := billing.TokenAmount(0, 119790, 0, 0, 16_000_000, 0, 10_000)
 	if err != nil {
-		t.Fatalf("tokenEstimateAmount() error = %v", err)
+		t.Fatalf("billing.TokenAmount() error = %v", err)
 	}
 	if amount != 1_916_640 {
-		t.Fatalf("tokenEstimateAmount() = %d", amount)
+		t.Fatalf("billing.TokenAmount() = %d", amount)
 	}
 }
 

@@ -76,7 +76,7 @@ export function AdminUserEditDrawer({
             open={Boolean(user)}
             width="min(520px, 100vw)"
             onClose={close}
-            maskClosable={!saving}
+            mask={{ closable: !saving }}
             destroyOnHidden
             extra={<Button type="primary" loading={saving} onClick={() => void save()}>保存</Button>}
         >
@@ -174,7 +174,7 @@ export function AdminUserCreateDrawer({
             open={open}
             width="min(520px, 100vw)"
             onClose={close}
-            maskClosable={!saving}
+            mask={{ closable: !saving }}
             destroyOnHidden
             extra={<Button type="primary" loading={saving} onClick={() => void save()}>{"\u4fdd\u5b58"}</Button>}
         >

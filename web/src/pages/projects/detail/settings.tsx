@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { App, Button, Input, Modal, Select } from "antd";
-import { Archive, Check, Eye, Palette, Pencil, Save, ShieldAlert } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { App, Button, Input, Modal, Select, Space, Switch, Tag } from "antd";
+import { Archive, Check, Eye, HeartPulse, Lock, Palette, Pencil, Route, Save, ShieldAlert, Workflow } from "lucide-react";
 
 import { CanvasStyleDetailModal, CanvasStylePickerModal, resolveProjectCanvasStyle, type CanvasStylePreset } from "@/components/canvas/canvas-style-picker-modal";
+import { UpgradeModal } from "@/components/entitlements/upgrade-modal";
 import { createStyleProfileSnapshot, parseStyleProfile, resolveStyleExecutionPlan, serializeStyleProfile } from "@/lib/canvas/style-profile";
-import { updateProject } from "@/services/api/projects";
+import { getProjectChannelOverrides, saveProjectChannelOverrides, updateProject, type ProjectChannelOverridesRequest } from "@/services/api/projects";
+import type { ModelChannel, ProjectChannelOverrides } from "@/stores/use-config-store";
 import { resolveModelRequestConfig, useEffectiveConfig } from "@/stores/use-config-store";
 
 import type { ProjectDetailViewProps } from "./shared";
@@ -24,7 +26,84 @@ export default function ProjectSettingsView({ detail, refreshProject }: ProjectD
     const [stylePickerOpen, setStylePickerOpen] = useState(false);
     const [styleEditorRequested, setStyleEditorRequested] = useState(false);
     const [archiveOpen, setArchiveOpen] = useState(false);
+    const [protagonistUpgradeOpen, setProtagonistUpgradeOpen] = useState(false);
+    // 主角模式（Beta，spec Task 13）：一期所有用户视为免费档，开关仅作占位展示，
+    // 点击即弹 Pro 升级引导；二期接入订阅与真实一致性引擎后再持久化到项目设置。
+    const hasProEntitlement = false;
+    const [protagonistMode, setProtagonistMode] = useState(false);
+    // 渠道覆盖
+    const [channelOverrides, setChannelOverrides] = useState<Record<string, string>>({});
+    const [overrideVersion, setOverrideVersion] = useState(0);
     useEffect(() => { setName(project.name); setDescription(project.description || ""); setAspectRatio(project.aspectRatio); setSourceType(project.sourceType); setStylePresetId(project.stylePresetId || ""); setStyleProfileJson(project.styleProfileJson || ""); }, [project]);
+    const channelOverrideQuery = useQuery<ProjectChannelOverrides>({
+        queryKey: ["project-channel-overrides", project.id],
+        queryFn: async () => {
+            try {
+                const result = await getProjectChannelOverrides(project.id);
+                return result;
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "读取渠道覆盖失败");
+                return { overrides: {}, version: 0 } as ProjectChannelOverrides;
+            }
+        },
+        staleTime: 60_000,
+    });
+    useEffect(() => {
+        if (!channelOverrideQuery.data) return;
+        setChannelOverrides({ ...(channelOverrideQuery.data.overrides || {}) });
+        setOverrideVersion(channelOverrideQuery.data.version ?? 0);
+    }, [channelOverrideQuery.data]);
+    const overrideDirty = useMemo(() => {
+        const keys = new Set<string>([...Object.keys(channelOverrides || {})]);
+        for (const key of Object.keys(channelOverrideQuery.data?.overrides || {})) keys.add(key);
+        if (overrideVersion !== (channelOverrideQuery.data?.version ?? 0)) return true;
+        for (const key of keys) {
+            if ((channelOverrides?.[key] || "") !== (channelOverrideQuery.data?.overrides?.[key] || "")) return true;
+        }
+        return false;
+    }, [channelOverrides, channelOverrideQuery.data, overrideVersion]);
+    const saveOverrideMutation = useMutation({
+        mutationFn: () => {
+            const payload: ProjectChannelOverridesRequest = { overrides: channelOverrides || {}, version: overrideVersion };
+            return saveProjectChannelOverrides(project.id, payload);
+        },
+        onSuccess: (next) => {
+            setOverrideVersion(next.version ?? overrideVersion + 1);
+            message.success("供应商覆盖已保存");
+        },
+        onError: (error) => message.error(error instanceof Error ? error.message : "保存供应商覆盖失败"),
+    });
+    const channelOptions = useMemo(() => {
+        const textChannels: ModelChannel[] = [];
+        const imageChannels: ModelChannel[] = [];
+        const videoChannels: ModelChannel[] = [];
+        const audioChannels: ModelChannel[] = [];
+        for (const channel of effectiveConfig.channels || []) {
+            if (channel.enabled === false) continue;
+            const models = channel.modelCosts?.length ? channel.modelCosts : [];
+            for (const m of models) {
+                if (m.capability === "text" && !textChannels.some((c) => c.id === channel.id)) textChannels.push(channel);
+                if (m.capability === "image" && !imageChannels.some((c) => c.id === channel.id)) imageChannels.push(channel);
+                if (m.capability === "video" && !videoChannels.some((c) => c.id === channel.id)) videoChannels.push(channel);
+                if (m.capability === "audio" && !audioChannels.some((c) => c.id === channel.id)) audioChannels.push(channel);
+            }
+            // 兼容没有 modelCosts 但有 models 的老渠道：按 interfaceType 推断
+            if (models.length === 0 && channel.models?.length) {
+                const fallback = channel.interfaceType || channel.apiFormat || "";
+                if (fallback.includes("chat") || fallback.includes("text") || fallback === "openai") textChannels.push(channel);
+                if (fallback.includes("image")) imageChannels.push(channel);
+                if (fallback.includes("video")) videoChannels.push(channel);
+                if (fallback.includes("audio")) audioChannels.push(channel);
+            }
+        }
+        const toOptions = (list: ModelChannel[]) => [{ label: "跟随系统 / 用户默认", value: "" }, ...list.map((channel) => ({ label: channel.name, value: channel.id }))];
+        return {
+            text: toOptions(textChannels),
+            image: toOptions(imageChannels),
+            video: toOptions(videoChannels),
+            audio: toOptions(audioChannels),
+        };
+    }, [effectiveConfig.channels]);
     const dirty = useMemo(() => name.trim() !== project.name || description !== (project.description || "") || aspectRatio !== project.aspectRatio || sourceType !== project.sourceType || stylePresetId !== (project.stylePresetId || "") || styleProfileJson !== (project.styleProfileJson || ""), [aspectRatio, description, name, project, sourceType, stylePresetId, styleProfileJson]);
     const selectedStyle = useMemo(() => resolveProjectCanvasStyle(stylePresetId, styleProfileJson), [stylePresetId, styleProfileJson]);
     const styleProfile = useMemo(() => parseStyleProfile(styleProfileJson) || selectedStyle?.profile || (selectedStyle ? createStyleProfileSnapshot(selectedStyle) : null), [selectedStyle, styleProfileJson]);
@@ -70,6 +149,61 @@ export default function ProjectSettingsView({ detail, refreshProject }: ProjectD
                 {styleExecutionPlans && (styleExecutionPlans.image.warnings.length || styleExecutionPlans.video.warnings.length) ? <div className="mt-2 grid gap-1 rounded-md bg-amber-500/5 px-3 py-2 text-[var(--fs-label)] leading-5 text-amber-600 dark:text-amber-400">{styleExecutionPlans.image.warnings.length ? <p>图片：{styleExecutionPlans.image.warnings.join("；")}</p> : null}{styleExecutionPlans.video.warnings.length ? <p>视频：{styleExecutionPlans.video.warnings.join("；")}</p> : null}</div> : null}
             </section>
 
+            <section className="py-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                        <h3 className="mb-0 text-sm font-semibold">供应商覆盖</h3>
+                        <p className="mt-0.5 text-[var(--fs-label)] text-foreground/45">按能力选择该项目专属供应商；覆盖后生成与计费会明确使用该渠道，不再回落默认。</p>
+                    </div>
+                    <Space>
+                        <Tag icon={<Route className="size-3" />} color="blue">版本 {overrideVersion}</Tag>
+                        <Button icon={overrideDirty ? <Save className="size-3.5" /> : <Check className="size-3.5" />} type={overrideDirty ? "primary" : "default"} disabled={!overrideDirty} loading={saveOverrideMutation.isPending} onClick={() => saveOverrideMutation.mutate()}>
+                            {overrideDirty ? "保存覆盖" : "已同步"}
+                        </Button>
+                    </Space>
+                </div>
+                <div className="grid gap-x-4 gap-y-3 rounded-lg bg-surface-active p-4 md:grid-cols-2 xl:grid-cols-4">
+                    <CapabilityOverride label="文本生成" icon={<Workflow className="size-3.5" />} capability="text" value={channelOverrides.text || ""} options={channelOptions.text} onChange={(value) => setChannelOverrides({ ...channelOverrides, text: value })} loading={channelOverrideQuery.isFetching} />
+                    <CapabilityOverride label="图片生成" icon={<Palette className="size-3.5" />} capability="image" value={channelOverrides.image || ""} options={channelOptions.image} onChange={(value) => setChannelOverrides({ ...channelOverrides, image: value })} loading={channelOverrideQuery.isFetching} />
+                    <CapabilityOverride label="视频生成" icon={<Eye className="size-3.5" />} capability="video" value={channelOverrides.video || ""} options={channelOptions.video} onChange={(value) => setChannelOverrides({ ...channelOverrides, video: value })} loading={channelOverrideQuery.isFetching} />
+                    <CapabilityOverride label="音频生成" icon={<ShieldAlert className="size-3.5" />} capability="audio" value={channelOverrides.audio || ""} options={channelOptions.audio} onChange={(value) => setChannelOverrides({ ...channelOverrides, audio: value })} loading={channelOverrideQuery.isFetching} />
+                </div>
+            </section>
+
+            <section className="py-5" data-testid="protagonist-consistency-section">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                        <h3 className="text-sm font-semibold">角色一致性 · 主角模式</h3>
+                        <p className="mt-0.5 text-[var(--fs-label)] text-foreground/45">开启后生成全程锁定主角脸部与体态，角色卡显示健康度徽章</p>
+                    </div>
+                    <Tag variant="filled" color="default">Beta</Tag>
+                </div>
+                <div className="flex flex-col gap-4 rounded-lg bg-surface-active p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-start gap-3">
+                        <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-[var(--brand-soft)] text-[var(--brand)]"><HeartPulse className="size-5" /></span>
+                        <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="text-sm font-semibold">主角模式</h4>
+                                {!hasProEntitlement ? <Tag variant="filled" color="gold"><Lock className="mr-1 inline size-3" />Pro 权益</Tag> : null}
+                            </div>
+                            <p className="mt-1 max-w-xl text-xs leading-5 text-foreground/55">跨镜头保持主角脸部、发型与体态一致；生成前自动体检角色卡，健康度不足时给出补图建议（侧脸、四分之三侧面、高清特写）。一期为 Beta 骨架，Pro 权益升级后开放。</p>
+                        </div>
+                    </div>
+                    {/* 巨型开关（TR-13-01）：免费档点击弹升级引导，开关保持关闭。 */}
+                    <Switch
+                        checked={protagonistMode}
+                        onChange={(next) => {
+                            if (next && !hasProEntitlement) {
+                                setProtagonistUpgradeOpen(true);
+                                return;
+                            }
+                            setProtagonistMode(next);
+                        }}
+                        aria-label="主角模式开关"
+                    />
+                </div>
+            </section>
+
             <section className="py-4">
                 <div className="flex flex-col gap-3 rounded-lg bg-red-500/5 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-center gap-2.5"><span className="grid size-7 shrink-0 place-items-center rounded bg-red-500/10 text-red-500"><Archive className="size-3.5" /></span><div className="min-w-0"><h3 className="text-sm font-medium">{project.status === "archived" ? "恢复项目" : "归档项目"}</h3><p className="mt-0.5 text-[var(--fs-label)] text-foreground/48">{project.status === "archived" ? "恢复后可继续创建章节、画布和生成任务" : "保留全部章节、画布和资产，停止项目内新建与生成"}</p></div></div>
@@ -80,6 +214,13 @@ export default function ProjectSettingsView({ detail, refreshProject }: ProjectD
             <Modal className="workspace-modal workspace-modal-compact" title={project.status === "archived" ? "恢复项目" : "归档项目"} open={archiveOpen} okText={project.status === "archived" ? "确认恢复" : "确认归档"} cancelText="取消" okButtonProps={{ danger: project.status !== "archived", loading: archiveMutation.isPending }} onCancel={() => setArchiveOpen(false)} onOk={() => archiveMutation.mutate()} styles={{ body: { paddingTop: 12 } }}><p className="m-0 text-sm leading-6 text-foreground/65">{project.status === "archived" ? "恢复后项目会重新进入可编辑状态。" : "归档不会删除章节、画布或资产，画布文档仍可在创作画布中打开。"}</p></Modal>
             <CanvasStylePickerModal open={stylePickerOpen} value={stylePresetId} currentProfile={styleProfile} startInEditor={styleEditorRequested} onClose={() => { setStylePickerOpen(false); setStyleEditorRequested(false); }} onSelect={(preset) => { applyStyle(preset); setStylePickerOpen(false); setStyleEditorRequested(false); }} />
             <CanvasStyleDetailModal open={Boolean(styleDetail)} preset={styleDetail} selected={styleDetail?.id === stylePresetId} onClose={() => setStyleDetail(null)} onSelect={(preset) => { applyStyle(preset); setStyleDetail(null); }} />
+            <UpgradeModal
+                open={protagonistUpgradeOpen}
+                onClose={() => setProtagonistUpgradeOpen(false)}
+                title="主角模式 Pro 权益"
+                feature="主角模式"
+                benefits={["跨镜头锁定主角脸部与体态一致性", "生成前角色卡自动体检，健康度不足给出补图建议", "支持多主角设定与镜头级切换"]}
+            />
         </div>
     );
 
@@ -99,4 +240,8 @@ function styleExecutionStatusLabel(status?: "ready" | "degraded" | "blocked") {
 
 function Field({ label, className = "", children }: { label: string; className?: string; children: ReactNode }) {
     return <label className={`grid gap-1.5 text-xs ${className}`}><span className="font-medium text-foreground/62">{label}</span>{children}</label>;
+}
+
+function CapabilityOverride({ label, icon, value, options, onChange, loading }: { label: string; icon: ReactNode; capability: "text" | "image" | "video" | "audio"; value: string; options: Array<{ label: string; value: string }>; onChange: (next: string) => void; loading?: boolean }) {
+    return <label className="grid gap-1.5 text-xs"><span className="flex items-center gap-1.5 font-medium text-foreground/62">{icon}{label}</span><Select showSearch allowClear loading={loading} className="w-full" placeholder="跟随系统 / 用户默认" value={value || undefined} options={options} optionFilterProp="label" onChange={(next) => onChange(next || "")} /></label>;
 }

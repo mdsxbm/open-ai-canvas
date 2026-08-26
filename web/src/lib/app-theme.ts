@@ -1,6 +1,12 @@
 import type { ThemeConfig } from "antd";
 import { theme as antdTheme } from "antd";
 
+// 幕山 Moshine 品牌 token：在 globals.css Semantic 层定义。
+// colorPrimary 直接读取 --brand，确保 AntD 与三层 token 同源（spec §1.2 + AC-BR-04）。
+// 暗色主题下 --brand 自动翻转为近白，AntD ConfigProvider 通过 algorithm 切换 + cssVar 同步。
+const BRAND_TOKEN = "var(--brand)";
+const BRAND_CONTRAST_TOKEN = "var(--brand-contrast)";
+
 // 主操作、普通选择和开关是不同交互语义，必须各自维护成对的背景/前景色。
 const controlTheme = {
     light: {
@@ -8,23 +14,30 @@ const controlTheme = {
         solidHoverBg: "#303030",
         solidActiveBg: "#404040",
         solidFg: "#ffffff",
+        checkBg: "#171717",
+        checkHoverBg: "#303030",
+        checkActiveBg: "#404040",
+        checkFg: "#ffffff",
+        switchCheckedBg: "#171717",
+        switchCheckedHoverBg: "#303030",
+        switchCheckedHandle: "#ffffff",
         selectedBg: "rgba(17, 17, 17, 0.09)",
         selectedHoverBg: "rgba(17, 17, 17, 0.13)",
         selectedActiveBg: "rgba(17, 17, 17, 0.16)",
-        selectedFg: "#171717",
-        controlSurface: "#ffffff",
+        selectedFg: BRAND_TOKEN,
+        controlSurface: BRAND_CONTRAST_TOKEN,
         controlBorder: "rgba(17, 17, 17, 0.18)",
         controlDisabledBg: "rgba(17, 17, 17, 0.05)",
         controlDisabledFg: "rgba(17, 17, 17, 0.36)",
         controlFocus: "rgba(17, 17, 17, 0.24)",
         switchOffBg: "rgba(17, 17, 17, 0.22)",
         switchOffHoverBg: "rgba(17, 17, 17, 0.3)",
-        switchOffHandle: "#ffffff",
-        menuBg: "#f5f5f5",
-        menuText: "#171717",
+        switchOffHandle: BRAND_CONTRAST_TOKEN,
+        menuBg: "var(--brand-soft)",
+        menuText: BRAND_TOKEN,
         selectActiveBg: "rgba(17, 17, 17, 0.035)",
         selectSelectedBg: "rgba(17, 17, 17, 0.065)",
-        selectText: "#171717",
+        selectText: BRAND_TOKEN,
         tableSelectedBg: "rgba(17, 17, 17, 0.05)",
         tableSelectedHoverBg: "rgba(17, 17, 17, 0.08)",
     },
@@ -33,10 +46,17 @@ const controlTheme = {
         solidHoverBg: "#ffffff",
         solidActiveBg: "#e5e5e5",
         solidFg: "#171717",
+        checkBg: "#f5f5f5",
+        checkHoverBg: "#ffffff",
+        checkActiveBg: "#e5e5e5",
+        checkFg: "#131313",
+        switchCheckedBg: "#f5f5f5",
+        switchCheckedHoverBg: "#ffffff",
+        switchCheckedHandle: "#131313",
         selectedBg: "rgba(255, 255, 255, 0.12)",
         selectedHoverBg: "rgba(255, 255, 255, 0.16)",
         selectedActiveBg: "rgba(255, 255, 255, 0.2)",
-        selectedFg: "#f5f5f5",
+        selectedFg: BRAND_TOKEN,
         controlSurface: "rgba(255, 255, 255, 0.035)",
         controlBorder: "rgba(255, 255, 255, 0.24)",
         controlDisabledBg: "rgba(255, 255, 255, 0.06)",
@@ -44,12 +64,12 @@ const controlTheme = {
         controlFocus: "rgba(255, 255, 255, 0.24)",
         switchOffBg: "rgba(255, 255, 255, 0.22)",
         switchOffHoverBg: "rgba(255, 255, 255, 0.3)",
-        switchOffHandle: "#f5f5f5",
-        menuBg: "#262626",
-        menuText: "#fafafa",
+        switchOffHandle: BRAND_TOKEN,
+        menuBg: "var(--brand-soft)",
+        menuText: BRAND_TOKEN,
         selectActiveBg: "rgba(255, 255, 255, 0.055)",
         selectSelectedBg: "rgba(255, 255, 255, 0.09)",
-        selectText: "#fafafa",
+        selectText: BRAND_TOKEN,
         tableSelectedBg: "rgba(255, 255, 255, 0.08)",
         tableSelectedHoverBg: "rgba(255, 255, 255, 0.12)",
     },
@@ -57,9 +77,16 @@ const controlTheme = {
 
 export function getAntThemeConfig(dark: boolean): ThemeConfig {
     const color = dark ? controlTheme.dark : controlTheme.light;
-    const elevatedBackground = dark ? "rgba(31, 31, 32, 0.96)" : "rgba(255, 255, 255, 0.96)";
+    // 浮层背景必须不透明（0.96 会透出下层内容）；与侧栏切换器等自定义浮层的实底背景保持一致
+    const elevatedBackground = dark ? "rgba(31, 31, 32, 1)" : "rgba(255, 255, 255, 1)";
     const subtleBackground = dark ? "rgba(255, 255, 255, 0.055)" : "rgba(17, 17, 17, 0.035)";
     const interactiveBorder = dark ? "rgba(255, 255, 255, 0.18)" : "rgba(17, 17, 17, 0.18)";
+    // 信息提示使用独立的浅色/深色表面，不能复用主操作的纯黑/纯白色；
+    // 否则 Ant Design 会根据 colorInfo 生成近似纯黑的浅色主题背景，造成文字对比度失效。
+    const infoBackground = dark ? "rgba(255, 255, 255, 0.08)" : "rgba(17, 17, 17, 0.045)";
+    const infoBackgroundHover = dark ? "rgba(255, 255, 255, 0.11)" : "rgba(17, 17, 17, 0.07)";
+    const infoBorder = dark ? "rgba(255, 255, 255, 0.2)" : "rgba(17, 17, 17, 0.14)";
+    const infoAccent = dark ? "#e4e4e7" : "#3f3f46";
     // 黑白主题使用边框表达焦点，避免输入控件周围出现蓝紫色光圈。
     const focusShadow = "none";
 
@@ -72,7 +99,16 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
             colorPrimaryActive: color.solidActiveBg,
             colorPrimaryBg: color.selectedBg,
             colorPrimaryBgHover: color.selectedHoverBg,
-            colorInfo: color.solidBg,
+            colorInfoBg: infoBackground,
+            colorInfoBgHover: infoBackgroundHover,
+            colorInfoBorder: infoBorder,
+            colorInfoBorderHover: infoBorder,
+            colorInfo: infoAccent,
+            colorInfoHover: dark ? "#ffffff" : "#27272a",
+            colorInfoActive: dark ? "#d4d4d8" : "#52525b",
+            colorInfoTextHover: dark ? "#fafafa" : "#27272a",
+            colorInfoText: dark ? "#f4f4f5" : "#27272a",
+            colorInfoTextActive: dark ? "#e4e4e7" : "#3f3f46",
             colorLink: color.solidBg,
             colorLinkHover: color.solidHoverBg,
             colorLinkActive: color.solidActiveBg,
@@ -103,7 +139,7 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
                 colorPrimaryHover: color.solidHoverBg,
                 colorPrimaryActive: color.solidActiveBg,
                 primaryColor: color.solidFg,
-                defaultBg: color.controlSurface,
+                defaultBg: "transparent",
                 defaultColor: color.selectedFg,
                 defaultBorderColor: color.controlBorder,
                 defaultHoverBg: color.selectedBg,
@@ -131,9 +167,9 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
             Switch: {
                 handleBg: color.switchOffHandle,
                 handleShadow: dark ? "0 1px 4px rgba(0, 0, 0, 0.42)" : "0 1px 2px rgba(0, 0, 0, 0.2)",
-                colorPrimary: color.solidBg,
-                colorPrimaryActive: color.solidActiveBg,
-                colorPrimaryHover: color.solidHoverBg,
+                colorPrimary: color.switchCheckedBg,
+                colorPrimaryActive: color.switchCheckedBg,
+                colorPrimaryHover: color.switchCheckedHoverBg,
                 colorTextQuaternary: color.switchOffBg,
                 colorTextTertiary: color.switchOffHoverBg,
                 controlOutline: color.controlFocus,
@@ -142,9 +178,9 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
                 colorBgContainer: color.controlSurface,
                 colorBgContainerDisabled: color.controlDisabledBg,
                 colorBorder: color.controlBorder,
-                colorPrimary: color.solidBg,
-                colorPrimaryActive: color.solidActiveBg,
-                colorPrimaryHover: color.solidHoverBg,
+                colorPrimary: color.checkBg,
+                colorPrimaryActive: color.checkActiveBg,
+                colorPrimaryHover: color.checkHoverBg,
                 controlOutline: color.controlFocus,
             },
             Radio: {
@@ -154,16 +190,16 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
                 buttonCheckedBg: color.selectedBg,
                 buttonCheckedBgDisabled: color.controlDisabledBg,
                 buttonCheckedColorDisabled: color.controlDisabledFg,
-                buttonSolidCheckedColor: color.solidFg,
-                buttonSolidCheckedActiveBg: color.solidActiveBg,
-                buttonSolidCheckedBg: color.solidBg,
-                buttonSolidCheckedHoverBg: color.solidHoverBg,
+                buttonSolidCheckedColor: color.checkFg,
+                buttonSolidCheckedActiveBg: color.checkActiveBg,
+                buttonSolidCheckedBg: color.checkBg,
+                buttonSolidCheckedHoverBg: color.checkHoverBg,
                 colorBgContainer: color.controlSurface,
                 colorBgContainerDisabled: color.controlDisabledBg,
                 colorBorder: color.controlBorder,
-                colorPrimary: color.solidBg,
-                colorPrimaryActive: color.solidActiveBg,
-                colorPrimaryHover: color.solidHoverBg,
+                colorPrimary: color.checkBg,
+                colorPrimaryActive: color.checkActiveBg,
+                colorPrimaryHover: color.checkHoverBg,
                 controlOutline: color.controlFocus,
             },
             Menu: {
@@ -237,6 +273,63 @@ export function getAntThemeConfig(dark: boolean): ThemeConfig {
                 headerBg: "transparent",
                 headerFontSize: 15,
                 bodyPadding: 18,
+            },
+        },
+    };
+}
+
+/**
+ * 管理后台使用更高密度的控件节奏；只在 AdminShell 内挂载，避免改变创作端的视觉契约。
+ */
+export function getAdminAntThemeConfig(dark: boolean): ThemeConfig {
+    const base = getAntThemeConfig(dark);
+    const mutedForeground = dark ? "rgba(250, 250, 250, 0.58)" : "rgba(23, 23, 23, 0.58)";
+
+    return {
+        ...base,
+        token: {
+            ...base.token,
+            borderRadius: 6,
+            borderRadiusLG: 8,
+            colorBgContainer: "var(--color-surface)",
+            colorBorder: "var(--color-border)",
+            fontFamily: "var(--font-sans)",
+            padding: 12,
+            paddingSM: 8,
+            fontSize: 13,
+        },
+        components: {
+            ...base.components,
+            Card: {
+                ...base.components?.Card,
+                boxShadow: "none",
+                boxShadowTertiary: "none",
+            },
+            Drawer: {
+                ...base.components?.Drawer,
+                colorBgElevated: "var(--color-surface)",
+            },
+            Form: {
+                ...base.components?.Form,
+                itemMarginBottom: 16,
+            },
+            Menu: {
+                ...base.components?.Menu,
+                itemHeight: 34,
+                itemSelectedBg: "transparent",
+            },
+            Table: {
+                ...base.components?.Table,
+                cellPaddingBlock: 8,
+                cellPaddingBlockMD: 8,
+                cellPaddingBlockSM: 6,
+                cellPaddingInline: 12,
+                cellPaddingInlineMD: 12,
+                cellPaddingInlineSM: 8,
+                headerBg: "transparent",
+                headerColor: mutedForeground,
+                headerSplitColor: "transparent",
+                borderColor: "var(--color-border)",
             },
         },
     };

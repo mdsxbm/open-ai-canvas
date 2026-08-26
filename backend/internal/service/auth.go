@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -22,14 +23,8 @@ const sessionMaxAge = 30 * 24 * time.Hour
 
 var usernamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,32}$`)
 
-type AuthError struct {
-	Status  int
-	Message string
-}
-
-func (e *AuthError) Error() string {
-	return e.Message
-}
+// AuthError 保留为兼容别名；跨认证域的新代码应直接使用 AppError。
+type AuthError = AppError
 
 type RegisterRequest struct {
 	Username    string `json:"username"`
@@ -37,6 +32,9 @@ type RegisterRequest struct {
 	EmailCode   string `json:"emailCode"`
 	DisplayName string `json:"displayName"`
 	Password    string `json:"password"`
+	// 幕山攀登计划邀请码（spec §3.3）。
+	// 公共注册开启时可空，关闭时必填并通过 ValidateInviteCode 校验。
+	InviteCode string `json:"inviteCode,omitempty"`
 }
 
 type LoginRequest struct {
@@ -67,19 +65,19 @@ type AuthUser struct {
 }
 
 func BadAuthRequest(message string) *AuthError {
-	return &AuthError{Status: 400, Message: message}
+	return NewAppError(400, message)
 }
 
 func NotFound(message string) *AuthError {
-	return &AuthError{Status: 404, Message: message}
+	return NewAppError(404, message)
 }
 
 func Unauthorized(message string) *AuthError {
-	return &AuthError{Status: 401, Message: message}
+	return NewAppError(401, message)
 }
 
 func Forbidden(message string) *AuthError {
-	return &AuthError{Status: 403, Message: message}
+	return NewAppError(403, message)
 }
 
 func (s *Service) PublicAuthSettings() (*PublicAuthSettings, error) {
@@ -105,6 +103,11 @@ func (s *Service) Register(req RegisterRequest) (*AuthSessionResult, error) {
 	username := normalizeUsername(req.Username)
 	email := normalizeEmail(req.Email)
 	displayName := normalizeDisplayName(req.DisplayName, username)
+	// 幕山攀登计划邀请码（spec §3.3）。
+	// 公共注册开启（registrationEnabled=true）→ 邀请码可空；
+	// 公共注册关闭（registrationEnabled=false）→ 必须有有效邀请码。
+	// 一期 mock：ValidateInviteCode 对任何非空 code 一律放行（见 invite.go 注释）。
+	inviteCode := strings.TrimSpace(req.InviteCode)
 	if err := validateUsername(username); err != nil {
 		return nil, err
 	}
@@ -129,7 +132,16 @@ func (s *Service) Register(req RegisterRequest) (*AuthSessionResult, error) {
 			return nil, err
 		}
 		if !registrationEnabled {
-			return nil, Forbidden("管理员未开放新用户注册")
+			if inviteCode == "" {
+				return nil, Forbidden("管理员未开放公共注册，请填写邀请码")
+			}
+			result, err := s.ValidateInviteCode(inviteCode)
+			if err != nil {
+				return nil, err
+			}
+			if !result.Valid {
+				return nil, BadAuthRequest("邀请码无效或已被使用")
+			}
 		}
 		if email == "" {
 			return nil, BadAuthRequest("请输入邮箱")
@@ -179,6 +191,12 @@ func (s *Service) Register(req RegisterRequest) (*AuthSessionResult, error) {
 	}
 	if err := s.ensureSignupBonus(user.ID); err != nil {
 		return nil, err
+	}
+	// 幕山攀登计划邀请码（spec §3.3）。
+	// 一期 mock：注册成功后调用 ConsumeReferralReward 预留接入点，不真实发奖；
+	// 二期接入真实表后再补 referrerID 解析与积分发放。
+	if inviteCode != "" {
+		_ = s.ConsumeReferralReward("", user.ID, inviteCode)
 	}
 	return s.createAuthSession(&user)
 }
@@ -232,7 +250,9 @@ func (s *Service) CurrentUser(cookieValue string) (*model.User, error) {
 		return nil, err
 	}
 	if time.Now().After(session.ExpiresAt) || session.TokenHash != hashToken(token) {
-		_ = s.repo.DeleteAuthSession(sessionID)
+		if cleanupErr := s.repo.DeleteAuthSession(sessionID); cleanupErr != nil {
+			log.Printf("expired auth session cleanup failed: session_id=%s error=%v", sessionID, cleanupErr)
+		}
 		return nil, Unauthorized("登录状态已失效")
 	}
 	user, err := s.repo.User(session.UserID)

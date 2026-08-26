@@ -49,6 +49,40 @@ func RegisterFinanceRoutes(r *gin.RouterGroup, svc *service.Service) {
 		}
 		ok(c, gin.H{"account": account})
 	})
+	r.GET("/wallet/packages", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		packages, err := svc.ListCreditPackages(user)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"packages": packages})
+	})
+	r.POST("/wallet/purchase-simulate", func(c *gin.Context) {
+		user, err := currentUser(c, svc)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		if !enforceRateLimit(c, "purchase-simulate:"+user.ID, 20, time.Hour) {
+			return
+		}
+		var req service.SimulatePurchaseRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		account, granted, err := svc.SimulatePurchase(user, req)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"account": account, "granted": granted})
+	})
 	r.POST("/wallet/checkin", func(c *gin.Context) {
 		user, err := currentUser(c, svc)
 		if err != nil {

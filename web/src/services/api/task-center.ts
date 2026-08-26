@@ -1,7 +1,7 @@
 import { DREAMINA_SUBMIT_ERROR_MESSAGES, generationErrorMessage } from "@/lib/generation-error";
 import { apiClient, request, type BackendEnvelope } from "@/services/api/request";
+import { recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
 import {
-    cancelLocalDreaminaGenerationTask,
     deleteLocalDreaminaGenerationTask,
     listLocalDreaminaGenerationTaskPage,
     queryLocalDreaminaGenerationTask,
@@ -167,6 +167,7 @@ export type CreateSessionInput = {
     projectStyle?: { presetId: string; title: string; prompt: string };
     characters?: Array<{ assetId: string; versionId: string; name: string; definition: Record<string, unknown> }>;
     config?: Record<string, unknown>;
+	logicalModelId?: string;
 };
 
 export type CreateTaskInput = {
@@ -177,6 +178,7 @@ export type CreateTaskInput = {
     prompt: string;
     provider?: string;
     model?: string;
+	logicalModelId?: string;
     input?: Record<string, unknown>;
 };
 
@@ -218,12 +220,53 @@ export function uploadAgentFile(sessionId: string, file: File) {
 
 export function createGenerationTask(input: CreateTaskInput) {
     return request<GenerationTask>(api.post("/tasks", input)).then((task) => {
+        recordDiagnosticEvent({ level: "info", category: "task", message: "任务已创建", taskId: task.id, projectId: task.projectId });
         notifyCanvasTaskCreated(task);
         // 创建任务时积分已被预占，不能等任务结束后才刷新可用余额。
         window.dispatchEvent(new CustomEvent("wallet:updated"));
         return task;
     });
 }
+
+// 幕山投拍 · 真人转绘任务入参（spec Task 12 / §3.6）。
+export type CreateRedrawTaskInput = {
+    /** 已上传素材或镜头切分后的参考资源 ID 列表（一期可传 mock shot 标识） */
+    referenceIds?: string[];
+    /** 风格 key，见 flow/redraw 页面 6 风格卡片 */
+    style: string;
+    /** 主角模式（Beta）：一期免费档强制关闭，Pro/Studio 才允许开启 */
+    protagonistMode: boolean;
+    /** 创作说明，作为任务 prompt 摘要展示 */
+    note?: string;
+};
+
+// 创建真人转绘任务：复用通用 /tasks 通道（type=flow_redraw / operation=style_redraw），
+// 后端按普通生成任务排队，任务列表通过 kind=redraw 过滤器可见（TR-12-04）。
+export function createRedrawTask(input: CreateRedrawTaskInput) {
+    const styleLabel = REDRAW_STYLE_LABELS[input.style] || input.style;
+    const prompt = [input.note?.trim(), `风格：${styleLabel}`, input.protagonistMode ? "主角模式：开启" : null].filter(Boolean).join(" · ");
+    return createGenerationTask({
+        type: "flow_redraw",
+        operation: "style_redraw",
+        prompt,
+        input: {
+            referenceIds: input.referenceIds ?? [],
+            style: input.style,
+            protagonistMode: input.protagonistMode,
+            note: input.note ?? "",
+        },
+    });
+}
+
+// 6 风格卡片 label 映射（与 /flow/redraw 页面 REDRAW_STYLES 保持一致）。
+export const REDRAW_STYLE_LABELS: Record<string, string> = {
+    pixar: "迪士尼皮克斯",
+    ghibli: "吉卜力",
+    korean_comic: "韩漫唯美",
+    american_comic: "美漫英雄",
+    ink_wash: "国风水墨",
+    cyberpunk: "赛博朋克",
+};
 
 export type GenerationTaskPageRequest = {
     limit: number;
@@ -389,6 +432,10 @@ export function appendTaskTextDelta(id: string, content: string) {
     return request<TaskTextDelta>(api.post(`/tasks/${encodeURIComponent(id)}/text-deltas`, { content }));
 }
 
+export function completeTextReplayTask(id: string, text: string) {
+    return request<GenerationTask>(api.post(`/tasks/${encodeURIComponent(id)}/text-replay-complete`, { text }));
+}
+
 export function queryTaskTextReplay(id: string, after = 0) {
     return request<TaskTextReplay>(api.get(`/tasks/${encodeURIComponent(id)}/text-deltas`, { params: { after } }));
 }
@@ -397,15 +444,19 @@ export function retryGenerationTask(id: string) {
     return request<GenerationTask>(api.post(`/tasks/${encodeURIComponent(id)}/retry`));
 }
 
-export function queryFailedVideoProviderTask(id: string) {
-    return request<ProviderTaskQueryResult>(api.post(`/tasks/${encodeURIComponent(id)}/query-provider`));
-}
-
 export function cancelGenerationTask(id: string) {
     if (isLocalDreaminaTaskId(id)) {
-        return cancelLocalDreaminaGenerationTask(stripLocalDreaminaTaskPrefix(id)).then((task) => projectLocalDreaminaTask(task));
+        return Promise.reject(new Error("官方即梦 CLI 当前不支持可靠取消"));
     }
-    return request<GenerationTask>(api.post(`/tasks/${encodeURIComponent(id)}/cancel`));
+    return request<GenerationTask>(api.post(`/tasks/${encodeURIComponent(id)}/cancel`)).then((task) => {
+        window.dispatchEvent(new CustomEvent("canvas:task-cancelled", { detail: { task } }));
+        window.dispatchEvent(new CustomEvent("wallet:updated"));
+        return task;
+    });
+}
+
+export function queryFailedVideoProviderTask(id: string) {
+    return request<ProviderTaskQueryResult>(api.post(`/tasks/${encodeURIComponent(id)}/query-provider`));
 }
 
 export function refreshGenerationTaskStatus(id: string, options?: { signal?: AbortSignal }) {
@@ -525,8 +576,7 @@ export async function waitForGenerationTask(id: string, options?: { signal?: Abo
         }
     } catch (error) {
         if (options?.signal?.aborted) {
-            await cancelGenerationTask(id).catch(() => undefined);
-            window.dispatchEvent(new CustomEvent("wallet:updated"));
+            // Abort 只停止当前页面的状态监听，不能把已发起的上游任务改成取消状态。
             throw new DOMException("Aborted", "AbortError");
         }
         throw error;

@@ -12,7 +12,7 @@ type Resource struct {
 	Provider string         `json:"provider" gorm:"size:24"`
 	Endpoint string         `json:"endpoint"`
 	Bucket   string         `json:"bucket" gorm:"size:160"`
-	// 用户 OSS 每次修改都会生成新版本，资源固定引用创建时的存储与密钥；同一存储位置的 CDN 域名可跟随当前配置。
+	// 用户 OSS 每次修改都会生成新版本，资源固定引用创建时的存储与密钥；只有同一存储位置才可复用当前 CDN。
 	StorageSettingID string    `json:"-" gorm:"index;size:36"`
 	ObjectKey        string    `json:"objectKey" gorm:"index"`
 	PublicURL        string    `json:"publicUrl"`
@@ -25,6 +25,28 @@ type Resource struct {
 	Error            string    `json:"error"`
 	CreatedAt        time.Time `json:"createdAt" gorm:"index:idx_resources_user_created,priority:2"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+// ResourceDeletionJob is the durable handoff between database deletion and
+// physical object cleanup. Storage fields are frozen because the Resource row
+// is removed in the same transaction that creates this job.
+type ResourceDeletionJob struct {
+	ID               string                 `json:"id" gorm:"primaryKey;size:36"`
+	UserID           string                 `json:"userId" gorm:"index;size:36"`
+	ResourceID       string                 `json:"resourceId" gorm:"index;size:36"`
+	Provider         string                 `json:"provider" gorm:"size:24"`
+	Endpoint         string                 `json:"endpoint"`
+	Bucket           string                 `json:"bucket" gorm:"size:160"`
+	StorageSettingID string                 `json:"-" gorm:"index;size:36"`
+	ObjectKey        string                 `json:"objectKey" gorm:"index"`
+	Status           ResourceDeletionStatus `json:"status" gorm:"index:idx_resource_deletion_jobs_due,priority:1;size:24"`
+	Attempts         int                    `json:"attempts"`
+	LastError        string                 `json:"lastError" gorm:"type:text"`
+	NextAttemptAt    time.Time              `json:"nextAttemptAt" gorm:"index:idx_resource_deletion_jobs_due,priority:2"`
+	LeaseOwner       string                 `json:"-" gorm:"index;size:120"`
+	LeaseExpiresAt   *time.Time             `json:"-" gorm:"index"`
+	CreatedAt        time.Time              `json:"createdAt"`
+	UpdatedAt        time.Time              `json:"updatedAt"`
 }
 
 type Asset struct {
@@ -44,7 +66,23 @@ type ProjectAssetLink struct {
 	ID        string    `json:"id" gorm:"primaryKey;size:36"`
 	ProjectID string    `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_project_asset_links_unique,priority:1"`
 	AssetID   string    `json:"assetId" gorm:"index;size:80;uniqueIndex:idx_project_asset_links_unique,priority:2"`
+	FolderID  string    `json:"folderId,omitempty" gorm:"index;size:36"`
+	Position  int       `json:"position" gorm:"index"`
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// ProjectAssetFolder 只保存项目内的目录结构；真实媒体仍由 Asset/Resource 唯一持有。
+type ProjectAssetFolder struct {
+	ID        string    `json:"id" gorm:"primaryKey;size:36"`
+	ProjectID string    `json:"projectId" gorm:"index;size:36;uniqueIndex:idx_project_asset_folders_sibling_name,priority:1"`
+	ParentID  string    `json:"parentId,omitempty" gorm:"index;size:36;uniqueIndex:idx_project_asset_folders_sibling_name,priority:2"`
+	Name      string    `json:"name" gorm:"size:240"`
+	NameKey   string    `json:"-" gorm:"size:240;uniqueIndex:idx_project_asset_folders_sibling_name,priority:3"`
+	Style     string    `json:"style" gorm:"size:24"`
+	Theme     string    `json:"theme" gorm:"size:24"`
+	Position  int       `json:"position" gorm:"index"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type ProjectAssetCandidate struct {
@@ -120,10 +158,15 @@ type Project struct {
 	Description      string        `json:"description" gorm:"type:text"`
 	StylePresetID    string        `json:"stylePresetId" gorm:"size:64"`
 	StyleProfileJSON string        `json:"styleProfileJson" gorm:"type:text"`
-	Status           ProjectStatus `json:"status" gorm:"index;size:24"`
-	Revision         int64         `json:"revision"`
-	CreatedAt        time.Time     `json:"createdAt"`
-	UpdatedAt        time.Time     `json:"updatedAt" gorm:"index"`
+	// ChannelOverridesJSON 存按能力→channelID 的覆盖映射，仿 StyleProfileJSON 模式。
+	// 形如：{"video":"ch_xxx","image":"ch_yyy"}；缺省能力走默认渠道解析。
+	ChannelOverridesJSON   string            `json:"channelOverridesJson,omitempty" gorm:"type:text"`
+	ChannelOverrides       map[string]string `json:"channelOverrides,omitempty" gorm:"-"`
+	ChannelOverrideVersion int64             `json:"channelOverrideVersion"`
+	Status                 ProjectStatus     `json:"status" gorm:"index;size:24"`
+	Revision               int64             `json:"revision"`
+	CreatedAt              time.Time         `json:"createdAt"`
+	UpdatedAt              time.Time         `json:"updatedAt" gorm:"index"`
 }
 
 // StyleProfile 是用户可持续编辑的风格源；项目只保存应用当时的 JSON 快照，避免源对象更新污染历史生成。

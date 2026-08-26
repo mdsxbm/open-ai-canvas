@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, Tooltip } from "antd";
+import { saveAs } from "file-saver";
 import { ArrowLeft, BookOpenText, Images, LayoutDashboard, LayoutGrid, Plus, Settings2, type LucideIcon } from "lucide-react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 
@@ -7,11 +8,14 @@ import { createCanvasProjectWithRemoteSync } from "@/services/user-data-sync";
 import { getProject, linkCanvasUnit } from "@/services/api/projects";
 import { WorkspacePage } from "@/components/layout/workspace-page";
 import { WorkspaceErrorState, WorkspaceLoadingState } from "@/components/layout/workspace-state";
+import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { upsertProjectChapterStoryboard } from "@/lib/canvas/project-chapter-storyboard";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 
 import ProjectAssetsView from "./detail/assets";
 import ProjectCanvasesView from "./detail/canvases";
 import ProjectChaptersView from "./detail/chapters";
+import ProjectExportMenu from "./detail/export-menu";
 import ProjectOverviewView from "./detail/overview";
 import ProjectSettingsView from "./detail/settings";
 
@@ -64,6 +68,29 @@ export default function ProjectDetailPage() {
         }).catch((error) => message.error(error instanceof Error ? error.message : "画布创建失败"));
     };
 
+    const canvasProjects = useCanvasStore((state) => state.projects);
+    // 导出菜单（spec Task 14）：画布数据走既有 zip 导出；分镜脚本按章节聚合生成文本。
+    const exportProjectCanvasData = () => {
+        const linked = canvasProjects.filter((project) => project.projectId === projectId);
+        if (!linked.length) { message.warning("该项目还没有关联画布，先创建一块画布再导出"); return; }
+        void exportCanvasProjects(linked, `幕山项目-${detail.data?.project.name || projectId}`);
+    };
+    const exportStoryboardText = () => {
+        const units = detail.data?.units ?? [];
+        const shots = detail.data?.shots ?? [];
+        if (!units.length) { message.warning("该项目还没有章节与分镜，先在剧情章节中创建"); return; }
+        const lines = [`《${detail.data?.project.name || "未命名项目"}》分镜脚本`, ""];
+        units.slice().sort((left, right) => left.position - right.position).forEach((unit) => {
+            lines.push(`## ${unit.title}`);
+            shots.filter((shot) => shot.unitId === unit.id).forEach((shot, index) => {
+                lines.push(`镜头 ${index + 1} · ${shot.title}（约 ${Math.round(shot.durationMs / 1000)}s）`);
+                if (shot.description) lines.push(shot.description);
+                lines.push("");
+            });
+        });
+        saveAs(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" }), `幕山分镜-${detail.data?.project.name || projectId}.txt`);
+    };
+
     if (detail.isLoading) return <WorkspacePage><WorkspaceLoadingState label="正在打开项目工作台" detail="读取章节、画布、资产和当前进度" /></WorkspacePage>;
     if (detail.isError || !detail.data) return <WorkspacePage><WorkspaceErrorState title="项目不可用" description="项目不存在、已被删除，或当前账号没有访问权限。" actionLabel="返回项目中心" onRetry={() => navigate("/projects")} /></WorkspacePage>;
     if (!chapterId && (!view || !views.some((item) => item.key === view))) return <Navigate to={`/projects/${projectId}/overview`} replace />;
@@ -84,7 +111,10 @@ export default function ProjectDetailPage() {
                         <nav className="thin-scrollbar order-last mt-1 flex h-11 w-full min-w-0 items-center gap-0.5 overflow-x-auto lg:order-none lg:mt-0 lg:h-16 lg:flex-1 lg:pl-3" aria-label="项目导航">
                             {views.map((item) => { const Icon = item.icon; const active = item.key === activeView; const href = item.key === "chapters" ? chapterHref : `/projects/${projectId}/${item.key}`; return <Link key={item.key} to={href} className={`relative flex h-11 shrink-0 items-center gap-2 rounded-md px-2.5 text-[var(--fs-body)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-3 ${active ? "bg-[var(--workspace-accent-soft)] font-medium text-foreground lg:after:absolute lg:after:inset-x-3 lg:after:bottom-0 lg:after:h-0.5 lg:after:rounded-full lg:after:bg-[var(--workspace-accent)]" : "text-foreground/52 hover:bg-surface-hover hover:text-foreground"}`} aria-current={active ? "page" : undefined}><Icon className={`size-4 shrink-0 ${active ? "text-[var(--workspace-accent)]" : "text-foreground/45"}`} /><span className="sm:hidden">{item.shortLabel}</span><span className="hidden sm:inline">{item.label}</span></Link>; })}
                         </nav>
-                        <Tooltip title={activeView === "chapters" && detail.data.units.length ? "新建当前章节画布" : "新建项目画布"}><Button size="small" className="!h-9 !shrink-0 !px-2 sm:!px-3" icon={<Plus className="size-4" />} onClick={createCanvas} aria-label={activeView === "chapters" && detail.data.units.length ? "新建当前章节画布" : "新建项目画布"}><span className="hidden sm:inline">新建画布</span></Button></Tooltip>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <ProjectExportMenu projectName={detail.data.project.name} onExportCanvasData={exportProjectCanvasData} onExportStoryboard={exportStoryboardText} />
+                            <Tooltip title={activeView === "chapters" && detail.data.units.length ? "新建当前章节画布" : "新建项目画布"}><Button size="small" className="!h-9 !shrink-0 !px-2 sm:!px-3" icon={<Plus className="size-4" />} onClick={createCanvas} aria-label={activeView === "chapters" && detail.data.units.length ? "新建当前章节画布" : "新建项目画布"}><span className="hidden sm:inline">新建画布</span></Button></Tooltip>
+                        </div>
                     </div>
                 </header>
                 {detail.data.project.status === "archived" ? <Alert type="warning" showIcon banner message="项目已归档，恢复后才能创建画布和生成任务" className="!border-x-0 !border-t-0" /> : null}
