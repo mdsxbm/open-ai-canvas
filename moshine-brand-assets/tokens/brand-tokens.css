@@ -1,0 +1,37 @@
+/*
+ * 幕山 Moshine 品牌语义色 Token（极致黑白极简 · 高端创作工业感）
+ *
+ * 设计原则（spec §1.2）：
+ * - 主色走 neutral/zinc 灰阶，仅一处极淡冷灰金强调色
+ * - 不使用品牌渐变，视觉核心是「黑白对比 + 排版张力」
+ * - 所有 token 引用项目已存在的 primitive，不引入新的 oklch/hex 字面色
+ *
+ * 使用方式：将 :root / .dark 两块追加到项目全局 CSS（如 globals.css），
+ * 然后在组件中用 var(--brand)、var(--accent) 等引用。
+ */
+
+:root {
+    /* 幕山黑：主色、主 CTA 文字色、顶栏选中态 */
+    --brand: var(--color-neutral-950);
+    /* 纯白：深色背景上的文字 */
+    --brand-contrast: var(--color-neutral-0);
+    /* 幕山柔色：卡片表面、选中态淡背景 */
+    --brand-soft: var(--color-neutral-50);
+    /* 幕山微光底色：hover 微光、描边淡阴影 */
+    --brand-glow: var(--color-neutral-100);
+    /* 幕山微光：极淡冷灰金替代物，强调色（饱和度 ≤ 15%） */
+    --accent: var(--color-neutral-200);
+}
+
+.dark {
+    /* 暗色下主色翻转为近白 */
+    --brand: var(--color-neutral-50);
+    /* 暗色下深背景文字翻转为深黑 */
+    --brand-contrast: var(--color-neutral-950);
+    /* 暗色下柔色 = 深灰表面 */
+    --brand-soft: var(--color-neutral-900);
+    /* 暗色下微光 = 中深灰 */
+    --brand-glow: var(--color-neutral-800);
+    /* 暗色下幕山微光 = 中灰 */
+    --accent: var(--color-neutral-700);
+}

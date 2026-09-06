@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 64" width="220" height="64">
+  <!-- 幕山 Moshine 完整 Logo：图形 Mark + 字标「幕山」+ 英文副标 + Slogan -->
+  <!-- 纯黑/白单色，无渐变。使用时可按需切换 fill 颜色适配明暗主题 -->
+  <g>
+    <!-- 图形 Mark -->
+    <rect x="0" y="10" width="44" height="44" rx="14" fill="#0a0a0a"/>
+    <rect x="15" y="17" width="3" height="5" rx="1" fill="#ffffff"/>
+    <rect x="20" y="17" width="3" height="5" rx="1" fill="#ffffff"/>
+    <rect x="25" y="17" width="3" height="5" rx="1" fill="#ffffff"/>
+    <rect x="12" y="30" width="5" height="16" rx="1" fill="#ffffff"/>
+    <rect x="19" y="23" width="5" height="23" rx="1" fill="#ffffff"/>
+    <rect x="26" y="33" width="5" height="13" rx="1" fill="#ffffff"/>
+  </g>
+  <!-- 字标「幕山」 -->
+  <text x="58" y="40" font-family="system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="32" font-weight="700" letter-spacing="-0.01em" fill="#0a0a0a">幕山</text>
+  <!-- 英文副标 Moshine -->
+  <text x="58" y="56" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="500" letter-spacing="0.02em" fill="#0a0a0a" opacity="0.55">Moshine</text>
+</svg>
